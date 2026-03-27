@@ -1,0 +1,26 @@
+{
+  "name": "create-line-harness",
+  "version": "0.1.0",
+  "description": "Set up LINE Harness with one command",
+  "type": "module",
+  "bin": {
+    "create-line-harness": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "execa": "^9.5.2",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
