@@ -270,6 +270,16 @@ function cleanEmptyNodes(obj: unknown): void {
 
 export function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
   if (messageType === 'text') {
+    try {
+      const parsed = JSON.parse(messageContent) as { text: string; quickReply?: unknown };
+      if (parsed.text) {
+        const msg: Record<string, unknown> = { type: 'text', text: parsed.text };
+        if (parsed.quickReply) msg.quickReply = parsed.quickReply;
+        return msg as unknown as Message;
+      }
+    } catch {
+      // not JSON, treat as plain text
+    }
     return { type: 'text', text: messageContent };
   }
 

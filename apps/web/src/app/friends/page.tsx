@@ -31,14 +31,14 @@ const ccPrompts = [
 const PAGE_SIZE = 20
 
 export default function FriendsPage() {
-  const { selectedAccountId } = useAccount()
+  const { selectedAccountId,loading: accountLoading } = useAccount()
   const [friends, setFriends] = useState<FriendWithTags[]>([])
   const [allTags, setAllTags] = useState<Tag[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [hasNextPage, setHasNextPage] = useState(false)
   const [selectedTagId, setSelectedTagId] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const loadTags = useCallback(async () => {
@@ -51,6 +51,7 @@ export default function FriendsPage() {
   }, [])
 
   const loadFriends = useCallback(async () => {
+    if(!selectedAccountId)return
     setLoading(true)
     setError('')
     try {
@@ -78,7 +79,7 @@ export default function FriendsPage() {
 
   useEffect(() => {
     loadTags()
-  }, [loadTags])
+  }, [])
 
   useEffect(() => {
     setPage(1)
@@ -86,12 +87,11 @@ export default function FriendsPage() {
 
   useEffect(() => {
     loadFriends()
-  }, [loadFriends])
+  }, [page, selectedAccountId, accountLoading])
 
   const handleTagFilter = (tagId: string) => {
     setSelectedTagId(tagId)
   }
-
   return (
     <div>
       <Header title="友だち管理" />

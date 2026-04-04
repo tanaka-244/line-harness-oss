@@ -617,6 +617,7 @@ export interface AccountMigration {
 export type AutomationEventType =
   | "friend_add"
   | "tag_change"
+  | "tag_added"
   | "score_threshold"
   | "cv_fire"
   | "message_received"

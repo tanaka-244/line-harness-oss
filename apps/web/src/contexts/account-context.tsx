@@ -45,7 +45,6 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       // localStorage unavailable
     }
   }, [])
-
   const refreshAccounts = useCallback(async () => {
     try {
       const res = await api.lineAccounts.list()
@@ -64,7 +63,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
             // localStorage unavailable
           }
           const valid = stored && list.some((a) => a.id === stored)
-          return valid ? stored : list[0].id
+          const selectedId = (valid ? stored : list[0].id) as string
+          try { localStorage.setItem(STORAGE_KEY, selectedId) } catch {}
+          return selectedId
         })
       } else {
         setAccounts([])
@@ -78,6 +79,13 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
+    // Pre-populate from localStorage immediately to avoid flash
+    let stored: string | null = null
+    try {
+      stored = localStorage.getItem(STORAGE_KEY)
+    } catch {}
+    if (stored) setSelectedAccountIdState(stored)
+    // Then fetch from API to populate accounts list and validate stored ID
     refreshAccounts()
   }, [refreshAccounts])
 

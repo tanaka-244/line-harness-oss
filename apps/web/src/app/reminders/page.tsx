@@ -126,8 +126,10 @@ export default function RemindersPage() {
   }, [selectedAccountId])
 
   useEffect(() => {
-    loadReminders()
-  }, [loadReminders])
+    if (selectedAccountId) {
+      loadReminders()
+    }
+  }, [loadReminders, selectedAccountId])
 
   const loadDetail = useCallback(async (id: string) => {
     setExpandLoading(true)

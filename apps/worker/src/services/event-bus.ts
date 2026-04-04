@@ -235,6 +235,10 @@ async function executeAction(
   switch (action.type) {
     case 'add_tag':
       await addTagToFriend(db, friendId!, action.params.tagId);
+      await fireEvent(db, 'tag_added', {
+        friendId: friendId!,
+        eventData: { tagId: action.params.tagId },
+      }, lineAccessToken);
       break;
 
     case 'remove_tag':
@@ -259,7 +263,18 @@ async function executeAction(
         const contents = JSON.parse(action.params.content);
         msg = { type: 'flex', altText: action.params.altText || extractFlexAltText(contents), contents };
       } else {
-        msg = { type: 'text', text: action.params.content };
+        try {
+          const parsed = JSON.parse(action.params.content) as { text: string; quickReply?: unknown };
+          if (parsed.text) {
+            const m: Record<string, unknown> = { type: 'text', text: parsed.text };
+            if (parsed.quickReply) m.quickReply = parsed.quickReply;
+            msg = m as unknown as Message;
+          } else {
+            msg = { type: 'text', text: action.params.content };
+          }
+        } catch {
+          msg = { type: 'text', text: action.params.content };
+        }
       }
       // Prefer replyMessage (free) when replyToken is available
       if (payload.replyToken) {

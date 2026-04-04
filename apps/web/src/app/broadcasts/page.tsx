@@ -75,7 +75,11 @@ export default function BroadcastsPage() {
     }
   }, [selectedAccountId])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (selectedAccountId) {
+      load()
+    }
+  }, [load, selectedAccountId])
 
   const handleSend = async (id: string) => {
     if (!confirm('この配信を今すぐ送信してもよいですか？')) return

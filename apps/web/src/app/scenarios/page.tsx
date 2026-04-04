@@ -78,8 +78,10 @@ export default function ScenariosPage() {
   }, [selectedAccountId])
 
   useEffect(() => {
-    loadScenarios()
-  }, [loadScenarios])
+    if (selectedAccountId) {
+      loadScenarios()
+    }
+  }, [loadScenarios, selectedAccountId])
 
   const handleCreate = async () => {
     if (!form.name.trim()) {

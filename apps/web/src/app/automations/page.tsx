@@ -6,7 +6,7 @@ import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 
-type AutomationEventType = "friend_add" | "tag_change" | "score_threshold" | "cv_fire" | "message_received" | "calendar_booked"
+type AutomationEventType = "friend_add" | "tag_change" | "tag_added" | "score_threshold" | "cv_fire" | "message_received" | "calendar_booked"
 
 interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu"
@@ -33,6 +33,7 @@ const eventTypeOptions: { value: AutomationEventType; label: string }[] = [
   { value: 'cv_fire', label: 'CV発火' },
   { value: 'message_received', label: 'メッセージ受信' },
   { value: 'calendar_booked', label: 'カレンダー予約' },
+  { value: 'tag_added', label: 'タグ付与時' },
 ]
 
 const eventTypeLabelMap: Record<AutomationEventType, string> = {
@@ -42,6 +43,7 @@ const eventTypeLabelMap: Record<AutomationEventType, string> = {
   cv_fire: 'CV発火',
   message_received: 'メッセージ受信',
   calendar_booked: 'カレンダー予約',
+  tag_added: 'タグ付与時',
 }
 
 const eventTypeBadgeColor: Record<AutomationEventType, string> = {
@@ -51,6 +53,7 @@ const eventTypeBadgeColor: Record<AutomationEventType, string> = {
   cv_fire: 'bg-red-100 text-red-700',
   message_received: 'bg-purple-100 text-purple-700',
   calendar_booked: 'bg-indigo-100 text-indigo-700',
+  tag_added: 'bg-teal-100 text-teal-700',
 }
 
 interface CreateFormState {
@@ -99,6 +102,12 @@ export default function AutomationsPage() {
   const [form, setForm] = useState<CreateFormState>({ ...initialForm })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null)
+  const [editActionsJson, setEditActionsJson] = useState('')
+  const [editConditionsJson, setEditConditionsJson] = useState('')
+  const [editName, setEditName] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
 
   const loadAutomations = useCallback(async () => {
     setLoading(true)
@@ -118,7 +127,9 @@ export default function AutomationsPage() {
   }, [selectedAccountId])
 
   useEffect(() => {
-    loadAutomations()
+    if (selectedAccountId) {
+      loadAutomations()
+    }
   }, [loadAutomations])
 
   const handleCreate = async () => {
@@ -165,6 +176,28 @@ export default function AutomationsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleEdit = (automation: Automation) => {
+    setEditingAutomation(automation)
+    setEditName(automation.name)
+    setEditActionsJson(JSON.stringify(automation.actions, null, 2))
+    setEditConditionsJson(JSON.stringify(automation.conditions, null, 2))
+    setEditError('')
+  }
+
+  const handleEditSave = async () => {
+    if (!editingAutomation) return
+    let parsedActions, parsedConditions
+    try { parsedActions = JSON.parse(editActionsJson) } catch { setEditError('アクションのJSON形式が正しくありません'); return }
+    try { parsedConditions = JSON.parse(editConditionsJson) } catch { setEditError('条件のJSON形式が正しくありません'); return }
+    setEditSaving(true)
+    try {
+      await api.automations.update(editingAutomation.id, { name: editName, actions: parsedActions, conditions: parsedConditions })
+      setEditingAutomation(null)
+      loadAutomations()
+    } catch { setEditError('更新に失敗しました') }
+    finally { setEditSaving(false) }
   }
 
   const handleToggleActive = async (id: string, current: boolean) => {
@@ -366,6 +399,12 @@ export default function AutomationsPage() {
               {/* Actions */}
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
                 <button
+                  onClick={() => handleEdit(automation)}
+                  className="px-3 py-1 min-h-[44px] text-xs font-medium text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                >
+                  編集
+                </button>
+                <button
                   onClick={() => handleDelete(automation.id)}
                   className="px-3 py-1 min-h-[44px] text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
                 >
@@ -374,6 +413,37 @@ export default function AutomationsPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+      {/* Edit Modal */}
+      {editingAutomation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <h2 className="text-sm font-semibold text-gray-800 mb-4">オートメーションを編集</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">ルール名</label>
+                <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" value={editName} onChange={(e) => setEditName(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">アクション (JSON)</label>
+                <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y" rows={8} value={editActionsJson} onChange={(e) => setEditActionsJson(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">条件 (JSON)</label>
+                <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y" rows={3} value={editConditionsJson} onChange={(e) => setEditConditionsJson(e.target.value)} />
+              </div>
+              {editError && <p className="text-xs text-red-600">{editError}</p>}
+              <div className="flex gap-2">
+                <button onClick={handleEditSave} disabled={editSaving} className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50" style={{ backgroundColor: '#06C755' }}>
+                  {editSaving ? '保存中...' : '保存'}
+                </button>
+                <button onClick={() => setEditingAutomation(null)} className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
       <CcPromptButton prompts={ccPrompts} />
