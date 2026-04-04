@@ -85,6 +85,7 @@ export default function DashboardPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (!selectedAccountId) return
     const load = async () => {
       setLoading(true)
       setError('')
