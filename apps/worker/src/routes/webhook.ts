@@ -66,7 +66,7 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -78,6 +78,62 @@ webhook.post('/webhook', async (c) => {
   return c.json({ status: 'ok' }, 200);
 });
 
+/** Upload binary content from LINE Content API to R2, return public URL. */
+async function saveMediaToR2(
+  lineClient: LineClient,
+  messageId: string,
+  r2: R2Bucket,
+  workerUrl: string,
+  contentType: string,
+  ext: string,
+): Promise<string> {
+  const buffer = await lineClient.getMessageContent(messageId);
+  const key = `line-media/${crypto.randomUUID()}.${ext}`;
+  await r2.put(key, buffer, { httpMetadata: { contentType } });
+  return `${workerUrl}/images/${key}`;
+}
+
+/** Resolve non-text message to { messageType, content } for messages_log. */
+async function resolveMediaMessage(
+  msg: { type: string; id: string; [key: string]: unknown },
+  lineClient: LineClient,
+  r2?: R2Bucket,
+  workerUrl?: string,
+): Promise<{ messageType: string; content: string }> {
+  try {
+    if (msg.type === 'image' && r2 && workerUrl) {
+      const url = await saveMediaToR2(lineClient, msg.id, r2, workerUrl, 'image/jpeg', 'jpg');
+      return { messageType: 'image', content: JSON.stringify({ originalContentUrl: url, previewImageUrl: url }) };
+    }
+    if (msg.type === 'video' && r2 && workerUrl) {
+      const url = await saveMediaToR2(lineClient, msg.id, r2, workerUrl, 'video/mp4', 'mp4');
+      return { messageType: 'video', content: JSON.stringify({ originalContentUrl: url, previewImageUrl: url }) };
+    }
+    if (msg.type === 'audio' && r2 && workerUrl) {
+      const url = await saveMediaToR2(lineClient, msg.id, r2, workerUrl, 'audio/mpeg', 'm4a');
+      return { messageType: 'audio', content: JSON.stringify({ originalContentUrl: url }) };
+    }
+    if (msg.type === 'file') {
+      const fileName = (msg.fileName as string) || 'file';
+      if (r2 && workerUrl) {
+        const ext = fileName.split('.').pop() || 'bin';
+        const url = await saveMediaToR2(lineClient, msg.id, r2, workerUrl, 'application/octet-stream', ext);
+        return { messageType: 'file', content: JSON.stringify({ originalContentUrl: url, fileName }) };
+      }
+      return { messageType: 'file', content: JSON.stringify({ fileName }) };
+    }
+    if (msg.type === 'sticker') {
+      return { messageType: 'sticker', content: JSON.stringify({ packageId: msg.packageId, stickerId: msg.stickerId }) };
+    }
+    if (msg.type === 'location') {
+      return { messageType: 'location', content: JSON.stringify({ title: msg.title, address: msg.address, latitude: msg.latitude, longitude: msg.longitude }) };
+    }
+  } catch (err) {
+    console.error(`Failed to process ${msg.type} message:`, err);
+  }
+  return { messageType: msg.type, content: `[${msg.type}]` };
+}
+
 async function handleEvent(
   db: D1Database,
   lineClient: LineClient,
@@ -86,6 +142,7 @@ async function handleEvent(
   lineAccountId: string | null = null,
   workerUrl?: string,
   liffUrl?: string,
+  imagesR2?: R2Bucket,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -187,8 +244,7 @@ async function handleEvent(
     return;
   }
 
-  if (event.type === 'message' && event.message.type === 'text') {
-    const textMessage = event.message as TextEventMessage;
+  if (event.type === 'message') {
     const userId =
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
@@ -215,6 +271,27 @@ async function handleEvent(
     }
     if (!friend) return;
 
+    // テキスト以外のメッセージ（画像・動画・音声・スタンプ・位置情報・ファイル）
+    if (event.message.type !== 'text') {
+      const msg = event.message as unknown as { type: string; id: string; [key: string]: unknown };
+      const { messageType, content } = await resolveMediaMessage(msg, lineClient, imagesR2, workerUrl);
+      const now = jstNow();
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
+           VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, messageType, content, now)
+        .run();
+      await upsertChatOnMessage(db, friend.id);
+      await fireEvent(db, 'message_received', {
+        friendId: friend.id,
+        eventData: { text: `[${messageType}]`, matched: false },
+      }, lineAccessToken, lineAccountId);
+      return;
+    }
+
+    const textMessage = event.message as TextEventMessage;
     const incomingText = textMessage.text;
     const now = jstNow();
     const logId = crypto.randomUUID();

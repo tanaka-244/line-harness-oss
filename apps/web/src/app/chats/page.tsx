@@ -582,11 +582,53 @@ export default function ChatsPage() {
                     } else if (msg.messageType === 'image') {
                       try {
                         const parsed = JSON.parse(msg.content)
-                        bubbleContent = (
-                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-[200px] rounded" />
-                        )
+                        const src = parsed.originalContentUrl || parsed.previewImageUrl
+                        bubbleContent = src
+                          ? <img src={src} alt="画像" className="max-w-[200px] rounded" />
+                          : <span>🖼️ [画像]</span>
                       } catch {
                         bubbleContent = <span>🖼️ [画像]</span>
+                      }
+                    } else if (msg.messageType === 'video') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        bubbleContent = parsed.originalContentUrl
+                          ? <video src={parsed.originalContentUrl} controls className="max-w-[240px] rounded" />
+                          : <span>🎥 [動画]</span>
+                      } catch {
+                        bubbleContent = <span>🎥 [動画]</span>
+                      }
+                    } else if (msg.messageType === 'audio') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        bubbleContent = parsed.originalContentUrl
+                          ? <audio src={parsed.originalContentUrl} controls className="w-[220px]" />
+                          : <span>🎵 [音声]</span>
+                      } catch {
+                        bubbleContent = <span>🎵 [音声]</span>
+                      }
+                    } else if (msg.messageType === 'file') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        bubbleContent = parsed.originalContentUrl
+                          ? <a href={parsed.originalContentUrl} target="_blank" rel="noopener noreferrer" className="underline text-blue-600">📎 {parsed.fileName || 'ファイル'}</a>
+                          : <span>📎 {parsed.fileName || '[ファイル]'}</span>
+                      } catch {
+                        bubbleContent = <span>📎 [ファイル]</span>
+                      }
+                    } else if (msg.messageType === 'sticker') {
+                      bubbleContent = <span className="text-2xl">🎭 スタンプ</span>
+                    } else if (msg.messageType === 'location') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        const q = encodeURIComponent(parsed.address || `${parsed.latitude},${parsed.longitude}`)
+                        bubbleContent = (
+                          <a href={`https://maps.google.com/?q=${q}`} target="_blank" rel="noopener noreferrer" className="underline">
+                            📍 {parsed.address || `${parsed.latitude}, ${parsed.longitude}`}
+                          </a>
+                        )
+                      } catch {
+                        bubbleContent = <span>📍 [位置情報]</span>
                       }
                     } else {
                       bubbleContent = <span>{msg.content}</span>
