@@ -194,8 +194,20 @@ async function handleEvent(
     if (!userId) return;
 
     let friend = await getFriendByLineUserId(db, userId);
-    if (!friend) {
-      friend = await upsertFriend(db, { lineUserId: userId });
+    // プロフィール未取得（名前がない）場合は取得して更新
+    if (!friend || !friend.display_name) {
+      let profile;
+      try {
+        profile = await lineClient.getProfile(userId);
+      } catch (err) {
+        console.error('Failed to get profile for', userId, err);
+      }
+      friend = await upsertFriend(db, {
+        lineUserId: userId,
+        displayName: profile?.displayName ?? null,
+        pictureUrl: profile?.pictureUrl ?? null,
+        statusMessage: profile?.statusMessage ?? null,
+      });
       if (lineAccountId) {
         await db.prepare('UPDATE friends SET line_account_id = ? WHERE id = ? AND line_account_id IS NULL')
           .bind(lineAccountId, friend.id).run();
