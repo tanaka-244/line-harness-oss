@@ -29,6 +29,8 @@ jobs:
       - run: pnpm --filter @line-crm/shared build
 
       - run: pnpm --filter web build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
 
       - uses: cloudflare/wrangler-action@v3
         with:
