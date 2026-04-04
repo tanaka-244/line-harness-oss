@@ -24,7 +24,7 @@ reminders.get('/api/reminders', async (c) => {
     let items: Awaited<ReturnType<typeof getReminders>>;
     if (lineAccountId) {
       const result = await c.env.DB
-        .prepare(`SELECT * FROM reminders WHERE line_account_id = ? ORDER BY created_at DESC`)
+        .prepare(`SELECT * FROM reminders WHERE line_account_id = ? OR line_account_id IS NULL ORDER BY created_at DESC`)
         .bind(lineAccountId)
         .all();
       items = result.results as unknown as Awaited<ReturnType<typeof getReminders>>;
