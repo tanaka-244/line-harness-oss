@@ -107,6 +107,18 @@ async function processSingleDelivery(
   },
   workerUrl?: string,
 ): Promise<void> {
+  // Atomic claim: update next_delivery_at to sentinel only if it still matches the expected value.
+  // If changes=0, another Cron instance already claimed this delivery — skip to prevent duplicates.
+  const claim = await db
+    .prepare(
+      `UPDATE friend_scenarios
+       SET next_delivery_at = '9999-12-31T00:00:00+09:00'
+       WHERE id = ? AND next_delivery_at = ? AND status = 'active'`,
+    )
+    .bind(fs.id, fs.next_delivery_at)
+    .run();
+  if (claim.meta.changes === 0) return;
+
   // Get friend first to read preferred delivery hour from metadata
   const friend = await getFriendById(db, fs.friend_id);
   if (!friend || !friend.is_following) {
