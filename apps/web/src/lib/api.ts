@@ -187,6 +187,16 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/broadcasts/${id}`, { method: 'DELETE' }),
     send: (id: string) =>
       fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send`, { method: 'POST' }),
+    sendSegment: (id: string, excludeTagId: string) =>
+      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send-segment`, {
+        method: 'POST',
+        body: JSON.stringify({
+          conditions: {
+            operator: 'AND',
+            rules: [{ type: 'tag_not_exists', value: excludeTagId }],
+          },
+        }),
+      }),
   },
 
   // ── Round 2 APIs ─────────────────────────────────────────────────────────

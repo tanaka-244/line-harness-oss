@@ -59,7 +59,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
         messageType: form.messageType,
         messageContent: form.messageContent,
         targetType: form.targetType,
-        targetTagId: form.targetType === 'tag' ? form.targetTagId || null : null,
+        targetTagId: (form.targetType === 'tag' || form.targetType === 'tag_exclude') ? form.targetTagId || null : null,
         status: 'draft',
         // datetime-local returns YYYY-MM-DDTHH:mm in JST wall-clock time
         // Append +09:00 so new Date() parses correctly for epoch comparisons
@@ -218,18 +218,34 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             >
               タグで絞り込み
             </button>
-          </div>
-          {form.targetType === 'tag' && (
-            <select
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
-              value={form.targetTagId}
-              onChange={(e) => setForm({ ...form, targetTagId: e.target.value })}
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, targetType: 'tag_exclude' })}
+              className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-md border transition-colors ${
+                form.targetType === 'tag_exclude'
+                  ? 'border-orange-500 text-orange-700 bg-orange-50'
+                  : 'border-gray-300 text-gray-600 bg-white hover:border-gray-400'
+              }`}
             >
-              <option value="">タグを選択...</option>
-              {tags.map((tag) => (
-                <option key={tag.id} value={tag.id}>{tag.name}</option>
-              ))}
-            </select>
+              タグなし（除外）
+            </button>
+          </div>
+          {(form.targetType === 'tag' || form.targetType === 'tag_exclude') && (
+            <>
+              {form.targetType === 'tag_exclude' && (
+                <p className="text-xs text-orange-600 mb-1">このタグを持っていない人に配信します</p>
+              )}
+              <select
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                value={form.targetTagId}
+                onChange={(e) => setForm({ ...form, targetTagId: e.target.value })}
+              >
+                <option value="">タグを選択...</option>
+                {tags.map((tag) => (
+                  <option key={tag.id} value={tag.id}>{tag.name}</option>
+                ))}
+              </select>
+            </>
           )}
         </div>
 

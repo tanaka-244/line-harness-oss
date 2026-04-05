@@ -81,11 +81,15 @@ export default function BroadcastsPage() {
     }
   }, [load, selectedAccountId])
 
-  const handleSend = async (id: string) => {
+  const handleSend = async (broadcast: ApiBroadcast) => {
     if (!confirm('この配信を今すぐ送信してもよいですか？')) return
-    setSendingId(id)
+    setSendingId(broadcast.id)
     try {
-      await api.broadcasts.send(id)
+      if (broadcast.targetType === 'tag_exclude' && broadcast.targetTagId) {
+        await api.broadcasts.sendSegment(broadcast.id, broadcast.targetTagId)
+      } else {
+        await api.broadcasts.send(broadcast.id)
+      }
       load()
     } catch {
       setError('送信に失敗しました')
@@ -214,6 +218,8 @@ export default function BroadcastsPage() {
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {broadcast.targetType === 'all' ? (
                         '全員'
+                      ) : broadcast.targetType === 'tag_exclude' ? (
+                        tagName ? <span className="text-orange-600">除外: {tagName}</span> : 'タグなし'
                       ) : tagName ? (
                         <span>タグ: {tagName}</span>
                       ) : (
@@ -247,7 +253,7 @@ export default function BroadcastsPage() {
                       <div className="flex items-center justify-end gap-2">
                         {broadcast.status === 'draft' && (
                           <button
-                            onClick={() => handleSend(broadcast.id)}
+                            onClick={() => handleSend(broadcast)}
                             disabled={isSending}
                             className="px-3 py-1 min-h-[44px] text-xs font-medium text-white rounded-md disabled:opacity-50 transition-opacity"
                             style={{ backgroundColor: '#06C755' }}
