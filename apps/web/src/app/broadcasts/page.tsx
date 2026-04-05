@@ -85,8 +85,10 @@ export default function BroadcastsPage() {
     if (!confirm('この配信を今すぐ送信してもよいですか？')) return
     setSendingId(broadcast.id)
     try {
-      if (broadcast.targetType === 'tag_exclude' && broadcast.targetTagId) {
-        await api.broadcasts.sendSegment(broadcast.id, broadcast.targetTagId)
+      if (broadcast.targetType === 'no_tags') {
+        await api.broadcasts.sendSegment(broadcast.id, { type: 'no_tags' })
+      } else if (broadcast.targetType === 'tag_exclude' && broadcast.targetTagId) {
+        await api.broadcasts.sendSegment(broadcast.id, { type: 'tag_exclude', tagId: broadcast.targetTagId })
       } else {
         await api.broadcasts.send(broadcast.id)
       }
@@ -218,6 +220,8 @@ export default function BroadcastsPage() {
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {broadcast.targetType === 'all' ? (
                         '全員'
+                      ) : broadcast.targetType === 'no_tags' ? (
+                        <span className="text-orange-600">タグなし（全員）</span>
                       ) : broadcast.targetType === 'tag_exclude' ? (
                         tagName ? <span className="text-orange-600">除外: {tagName}</span> : 'タグなし'
                       ) : tagName ? (

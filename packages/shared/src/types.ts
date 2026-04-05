@@ -139,7 +139,7 @@ export interface FriendScenario {
 // -----------------------------------------------------------------------------
 
 /** 配信対象種別 */
-export type BroadcastTargetType = "all" | "tag" | "tag_exclude";
+export type BroadcastTargetType = "all" | "tag" | "tag_exclude" | "no_tags";
 
 /** 配信ステータス */
 export type BroadcastStatus = "draft" | "scheduled" | "sending" | "sent";

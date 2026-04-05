@@ -60,6 +60,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
         messageContent: form.messageContent,
         targetType: form.targetType,
         targetTagId: (form.targetType === 'tag' || form.targetType === 'tag_exclude') ? form.targetTagId || null : null,
+        // no_tags: targetTagId is null (no tag needed)
         status: 'draft',
         // datetime-local returns YYYY-MM-DDTHH:mm in JST wall-clock time
         // Append +09:00 so new Date() parses correctly for epoch comparisons
@@ -229,7 +230,21 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             >
               タグなし（除外）
             </button>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, targetType: 'no_tags', targetTagId: '' })}
+              className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-md border transition-colors ${
+                form.targetType === 'no_tags'
+                  ? 'border-orange-500 text-orange-700 bg-orange-50'
+                  : 'border-gray-300 text-gray-600 bg-white hover:border-gray-400'
+              }`}
+            >
+              タグなし（全員）
+            </button>
           </div>
+          {form.targetType === 'no_tags' && (
+            <p className="text-xs text-orange-600 mb-1">タグを1件も持っていない人全員に配信します</p>
+          )}
           {(form.targetType === 'tag' || form.targetType === 'tag_exclude') && (
             <>
               {form.targetType === 'tag_exclude' && (

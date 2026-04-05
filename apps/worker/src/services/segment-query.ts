@@ -1,5 +1,5 @@
 export interface SegmentRule {
-  type: 'tag_exists' | 'tag_not_exists' | 'metadata_equals' | 'metadata_not_equals' | 'ref_code' | 'is_following'
+  type: 'tag_exists' | 'tag_not_exists' | 'no_tags' | 'metadata_equals' | 'metadata_not_equals' | 'ref_code' | 'is_following'
   value: string | boolean | { key: string; value: string }
 }
 
@@ -33,6 +33,11 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
           `NOT EXISTS (SELECT 1 FROM friend_tags ft WHERE ft.friend_id = f.id AND ft.tag_id = ?)`,
         )
         bindings.push(rule.value)
+        break
+      }
+
+      case 'no_tags': {
+        clauses.push(`NOT EXISTS (SELECT 1 FROM friend_tags ft WHERE ft.friend_id = f.id)`)
         break
       }
 

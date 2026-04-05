@@ -187,13 +187,15 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/broadcasts/${id}`, { method: 'DELETE' }),
     send: (id: string) =>
       fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send`, { method: 'POST' }),
-    sendSegment: (id: string, excludeTagId: string) =>
+    sendSegment: (id: string, options: { type: 'tag_exclude'; tagId: string } | { type: 'no_tags' }) =>
       fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send-segment`, {
         method: 'POST',
         body: JSON.stringify({
           conditions: {
             operator: 'AND',
-            rules: [{ type: 'tag_not_exists', value: excludeTagId }],
+            rules: options.type === 'no_tags'
+              ? [{ type: 'no_tags' }]
+              : [{ type: 'tag_not_exists', value: options.tagId }],
           },
         }),
       }),
