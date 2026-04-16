@@ -10,6 +10,9 @@ import {
   deleteScenarioStep,
   enrollFriendInScenario,
   getFriendById,
+  getScenarioSteps,
+  advanceFriendScenario,
+  jstNow,
 } from '@line-crm/db';
 import type {
   Scenario as DbScenario,
@@ -19,6 +22,8 @@ import type {
   ScenarioTriggerType,
   MessageType,
 } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
+import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const scenarios = new Hono<Env>();
@@ -319,6 +324,110 @@ scenarios.post('/api/scenarios/:id/enroll/:friendId', async (c) => {
     return c.json({ success: true, data: serializeFriendScenario(enrollment) }, 201);
   } catch (err) {
     console.error('POST /api/scenarios/:id/enroll/:friendId error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/scenarios/trigger - 手動でシナリオ発火（Step 1 をすぐ push 送信し、返答待ち状態へ）
+scenarios.post('/api/scenarios/trigger', async (c) => {
+  try {
+    const body = await c.req.json<{
+      friendId: string;
+      scenarioId?: string;
+      scenarioName?: string;
+    }>();
+
+    if (!body.friendId) {
+      return c.json({ success: false, error: 'friendId is required' }, 400);
+    }
+
+    const db = c.env.DB;
+
+    // シナリオを名前または ID で取得
+    let scenario: DbScenario | null = null;
+    if (body.scenarioId) {
+      scenario = await getScenarioById(db, body.scenarioId);
+    } else if (body.scenarioName) {
+      scenario = await db
+        .prepare(`SELECT * FROM scenarios WHERE name = ? LIMIT 1`)
+        .bind(body.scenarioName)
+        .first<DbScenario>();
+    }
+    if (!scenario) {
+      return c.json({ success: false, error: 'Scenario not found' }, 404);
+    }
+
+    // 友だちの存在確認
+    const friend = await getFriendById(db, body.friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    // アクティブな既存エンロールがあればスキップ
+    const existing = await db
+      .prepare(
+        `SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ? AND status = 'active'`,
+      )
+      .bind(friend.id, scenario.id)
+      .first<{ id: string }>();
+    if (existing) {
+      return c.json({ success: false, error: 'Friend is already enrolled in this scenario' }, 409);
+    }
+
+    // エンロール（next_delivery_at = now が設定される）
+    const enrollment = await enrollFriendInScenario(db, friend.id, scenario.id);
+
+    const steps = await getScenarioSteps(db, scenario.id);
+    const firstStep = steps[0];
+    if (!firstStep) {
+      // ステップなし → completed
+      return c.json({ success: true, data: serializeFriendScenario(enrollment) });
+    }
+
+    // クロン配信と競合しないよう先に sentinel をセット
+    const SENTINEL = '9999-12-31T00:00:00+09:00';
+    await db
+      .prepare(
+        `UPDATE friend_scenarios SET next_delivery_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .bind(SENTINEL, jstNow(), enrollment.id)
+      .run();
+
+    // Step 1 を即時 push 送信
+    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    const expandedContent = expandVariables(
+      firstStep.message_content,
+      friend as { id: string; display_name: string | null; user_id: string | null },
+      c.env.WORKER_URL,
+    );
+    const message = buildMessage(firstStep.message_type, expandedContent);
+    await lineClient.pushMessage(friend.line_user_id, [message]);
+
+    // 送信ログ
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'push', ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        friend.id,
+        firstStep.message_type,
+        firstStep.message_content,
+        firstStep.id,
+        jstNow(),
+      )
+      .run();
+
+    // current_step_order を Step 1 に進め、next_delivery_at は sentinel のまま（返答待ち）
+    await advanceFriendScenario(db, enrollment.id, firstStep.step_order, SENTINEL);
+
+    return c.json({
+      success: true,
+      data: { ...serializeFriendScenario(enrollment), currentStepOrder: firstStep.step_order },
+    }, 201);
+  } catch (err) {
+    console.error('POST /api/scenarios/trigger error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

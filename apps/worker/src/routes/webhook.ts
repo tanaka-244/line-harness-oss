@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { verifySignature, LineClient } from '@line-crm/line-sdk';
-import type { WebhookRequestBody, WebhookEvent, TextEventMessage } from '@line-crm/line-sdk';
+import type { WebhookRequestBody, WebhookEvent, TextEventMessage, Message } from '@line-crm/line-sdk';
 import {
   upsertFriend,
   updateFriendFollowStatus,
@@ -305,6 +305,30 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
+    // ===== 施術後アンケート返答ハンドラ =====
+    // sentinel (9999-12-31) で停止中の survey enrollment があれば返答を処理し早期 return
+    {
+      const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+      const activeSurvey = await db
+        .prepare(
+          `SELECT fs.id, fs.current_step_order FROM friend_scenarios fs
+           JOIN scenarios s ON s.id = fs.scenario_id
+           WHERE fs.friend_id = ? AND s.name = ? AND fs.status = 'active' AND fs.next_delivery_at = ?`,
+        )
+        .bind(friend.id, '施術後アンケート', SURVEY_SENTINEL)
+        .first<{ id: string; current_step_order: number }>();
+
+      if (activeSurvey) {
+        await handleSurveyResponse(db, lineClient, event.replyToken, friend, activeSurvey, incomingText);
+        await fireEvent(db, 'message_received', {
+          friendId: friend.id,
+          eventData: { text: incomingText, matched: true },
+        }, lineAccessToken, lineAccountId);
+        return;
+      }
+    }
+    // ==========================================
+
     // チャットを作成/更新（ユーザーの自発的メッセージのみ unread にする）
     // ボタンタップ等の自動応答キーワードは除外
     const autoKeywords = ['料金', '機能', 'API', 'フォーム', 'ヘルプ', 'UUID', 'UUID連携について教えて', 'UUID連携を確認', '配信時間', '導入支援を希望します', 'アカウント連携を見る', '体験を完了する', 'BAN対策を見る', '連携確認'];
@@ -464,6 +488,133 @@ async function handleEvent(
     }, lineAccessToken, lineAccountId);
 
     return;
+  }
+}
+
+// ============================================================
+// 施術後アンケート — 会話ハンドラ
+// friend_scenarios.current_step_order の値でステートを管理する
+//   1 → Step 1 送信済み、Q1 返答待ち（もちろん！ / また今度）
+//   2 → Step 2 送信済み、Q2 返答待ち（症状回答）
+// ============================================================
+async function handleSurveyResponse(
+  db: D1Database,
+  lineClient: InstanceType<typeof LineClient>,
+  replyToken: string,
+  friend: { id: string; line_user_id: string; display_name: string | null },
+  survey: { id: string; current_step_order: number },
+  incomingText: string,
+): Promise<void> {
+  const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+
+  if (survey.current_step_order === 1) {
+    // ── Q1 返答: もちろん！ / また今度 ──────────────────────────
+    if (incomingText === 'もちろん！') {
+      // Step 2 を返信（クイックリプライ付き）
+      const q2Content = '{"text":"施術を受けて、症状はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良くなった👍","text":"とても良くなった👍"}},{"type":"action","action":{"type":"message","label":"少し良くなった","text":"少し良くなった"}},{"type":"action","action":{"type":"message","label":"変わらない","text":"変わらない"}},{"type":"action","action":{"type":"message","label":"悪くなった","text":"悪くなった"}}]}}';
+      await lineClient.replyMessage(replyToken, [buildMessage('text', q2Content)]);
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', 'text', ?, 'reply', ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, q2Content, jstNow())
+        .run();
+      await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
+    } else {
+      // また今度 または想定外の返答 → 丁寧にクローズ
+      const byeText = 'わかりました！またいつでもご来院をお待ちしております😊';
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: byeText } as Message]);
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', 'text', ?, 'reply', ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, byeText, jstNow())
+        .run();
+      await completeFriendScenario(db, survey.id);
+    }
+    return;
+  }
+
+  if (survey.current_step_order === 2) {
+    // ── Q2 返答: 症状回答 ────────────────────────────────────────
+    const LOW_SCORE_MESSAGE = '貴重なご意見ありがとうございました！\nさらに良い施術ができるよう努めてまいります。\nまたのご来院をお待ちしております😊';
+    const scoreMap: Record<string, { score: number; thankYou: string }> = {
+      'とても良くなった👍': { score: 5, thankYou: '' },
+      '少し良くなった':     { score: 4, thankYou: '' },
+      '変わらない':         { score: 2, thankYou: LOW_SCORE_MESSAGE },
+      '悪くなった':         { score: 1, thankYou: LOW_SCORE_MESSAGE },
+    };
+
+    const entry = scoreMap[incomingText];
+    if (!entry) return; // 想定外の返答は無視（waiting 状態を継続）
+
+    const now = jstNow();
+
+    // friend_scores に記録
+    await db
+      .prepare(
+        `INSERT INTO friend_scores (id, friend_id, scoring_rule_id, score_change, reason, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, entry.score, `施術後アンケート: ${incomingText}`, now)
+      .run();
+
+    // friends.score を加算
+    await db
+      .prepare(`UPDATE friends SET score = score + ?, updated_at = ? WHERE id = ?`)
+      .bind(entry.score, now, friend.id)
+      .run();
+
+    if (entry.score >= 4) {
+      // Step 3: Google レビュー依頼 Flex（DB の message_content を使用 → 管理画面で URL 変更可能）
+      const step3Row = await db
+        .prepare(
+          `SELECT ss.message_content FROM scenario_steps ss
+           JOIN scenarios s ON s.id = ss.scenario_id
+           WHERE s.name = '施術後アンケート' AND ss.step_order = 3 LIMIT 1`,
+        )
+        .first<{ message_content: string }>();
+
+      // DB になければフォールバック（初期 seed と同一内容）
+      const reviewContent = step3Row?.message_content ?? JSON.stringify({
+        type: 'bubble',
+        body: {
+          type: 'box', layout: 'vertical', paddingAll: '20px',
+          contents: [
+            { type: 'text', text: '嬉しいです😊 もしよろしければ、Googleでの口コミ投稿をお願いできますか？\n私たちの大きな励みになります🙏', size: 'sm', color: '#1e293b', wrap: true },
+          ],
+        },
+        footer: {
+          type: 'box', layout: 'vertical', paddingAll: '16px',
+          contents: [
+            { type: 'button', action: { type: 'uri', label: '口コミを書く', uri: 'https://g.page/r/CRwRXX3LUHkeEBE/review' }, style: 'primary', color: '#06C755' },
+          ],
+        },
+      });
+
+      await lineClient.replyMessage(replyToken, [buildMessage('flex', reviewContent)]);
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', 'flex', ?, 'reply', ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, reviewContent, now)
+        .run();
+    } else {
+      // score < 4: お礼メッセージのみ
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: entry.thankYou } as Message]);
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', 'text', ?, 'reply', ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, entry.thankYou, now)
+        .run();
+    }
+
+    await completeFriendScenario(db, survey.id);
   }
 }
 
