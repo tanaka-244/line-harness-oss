@@ -41,7 +41,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 execute line-crm --remote --file=packages/db/migrations/013_survey_scenario.sql
+          command: d1 execute line-crm --remote --file=../../packages/db/migrations/013_survey_scenario.sql
           workingDirectory: apps/worker
 
       - name: Deploy Worker
