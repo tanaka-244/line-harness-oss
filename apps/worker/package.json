@@ -14,9 +14,7 @@
     "hono": "^4.6.0",
     "@line-crm/db": "workspace:*",
     "@line-crm/line-sdk": "workspace:*",
-    "@line-crm/shared": "workspace:*",
-    "pdf-lib": "^1.17.1",
-    "@pdf-lib/fontkit": "^1.1.1"
+    "@line-crm/shared": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.0",
