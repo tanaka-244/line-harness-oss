@@ -12,6 +12,7 @@ import {
   completeFriendScenario,
   upsertChatOnMessage,
   getLineAccounts,
+  addTagToFriend,
   jstNow,
 } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
@@ -243,6 +244,100 @@ async function handleEvent(
     await updateFriendFollowStatus(db, userId, false);
     return;
   }
+
+  // ===== ポストバック: survey_a（Flex ボタンによるタグ付け → アンケート導線） =====
+  if (event.type === 'postback') {
+    const userId = event.source.type === 'user' ? event.source.userId : undefined;
+    if (!userId) return;
+
+    const data = (event as unknown as { postback: { data: string } }).postback.data;
+    const params = new URLSearchParams(data);
+    const action = params.get('action');
+    const tagId  = params.get('tagId');
+
+    if (action === 'survey_a' && tagId) {
+      const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+      const SURVEY_SCENARIO_ID = 'a0000000-0000-4000-8000-000000000001';
+
+      let friend = await getFriendByLineUserId(db, userId);
+      if (!friend) {
+        try {
+          const profile = await lineClient.getProfile(userId);
+          friend = await upsertFriend(db, {
+            lineUserId: userId,
+            displayName: profile?.displayName ?? null,
+            pictureUrl:  profile?.pictureUrl  ?? null,
+            statusMessage: profile?.statusMessage ?? null,
+          });
+        } catch {
+          return;
+        }
+      }
+      if (!friend) return;
+
+      const now = jstNow();
+
+      // 1. タグを付与
+      await addTagToFriend(db, friend.id, tagId);
+
+      // 2. このタグをトリガーとするシナリオがあればエントリ
+      const scenarios = await getScenarios(db);
+      for (const s of scenarios) {
+        if (s.trigger_type === 'tag_added' && s.trigger_tag_id === tagId && s.is_active) {
+          await enrollFriendInScenario(db, friend.id, s.id);
+        }
+      }
+
+      // 3. アンケートシナリオへエントリ（step_order=0: ポストバック起点の同意待ち）
+      await db
+        .prepare(
+          `INSERT INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
+           SELECT ?, ?, ?, 0, 'active', ?, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM friend_scenarios
+             WHERE friend_id = ? AND scenario_id = ? AND status = 'active'
+           )`,
+        )
+        .bind(
+          crypto.randomUUID(), friend.id, SURVEY_SCENARIO_ID, now, SURVEY_SENTINEL, now,
+          friend.id, SURVEY_SCENARIO_ID,
+        )
+        .run();
+
+      // 4. アンケート同意 QR を送信（replyToken を使用）
+      const SURVEY_INVITE_TEXT = '最後にひとつだけ、アンケートにご協力いただけますか？😊';
+      const surveyInviteMsg = {
+        type: 'text',
+        text: SURVEY_INVITE_TEXT,
+        quickReply: {
+          items: [
+            { type: 'action', action: { type: 'message', label: 'もちろん！', text: 'もちろん！' } },
+            { type: 'action', action: { type: 'message', label: 'また今度',  text: 'また今度'  } },
+          ],
+        },
+      } as unknown as Message;
+
+      try {
+        await lineClient.replyMessage(event.replyToken, [surveyInviteMsg]);
+        await db
+          .prepare(
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+             VALUES (?, ?, 'outgoing', 'text', ?, 'reply', ?)`,
+          )
+          .bind(crypto.randomUUID(), friend.id, SURVEY_INVITE_TEXT, now)
+          .run();
+      } catch (err) {
+        console.error('Failed to send survey invite after postback', err);
+      }
+
+      await fireEvent(db, 'message_received', {
+        friendId: friend.id,
+        eventData: { text: data, matched: true },
+      }, lineAccessToken, lineAccountId);
+    }
+    return;
+  }
+  // =====================================================================
 
   if (event.type === 'message') {
     const userId =

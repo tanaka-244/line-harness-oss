@@ -12,23 +12,6 @@ import type { SegmentCondition } from './segment-query.js';
 
 const MULTICAST_BATCH_SIZE = 500;
 
-// 施術後アンケートシナリオ ID（seed で固定）
-const SURVEY_SCENARIO_ID = 'a0000000-0000-4000-8000-000000000001';
-// シナリオ待機センチネル（next_delivery_at をこの値にすることで Cron スキップ）
-const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
-// ブロードキャスト起点のアンケート同意メッセージ（QR 付き）
-// TextMessage 型には quickReply が含まれないため unknown 経由でキャスト
-const SURVEY_INVITE_MESSAGE = {
-  type: 'text',
-  text: '最後にひとつだけ、アンケートにご協力いただけますか？😊',
-  quickReply: {
-    items: [
-      { type: 'action', action: { type: 'message', label: 'もちろん！', text: 'もちろん！' } },
-      { type: 'action', action: { type: 'message', label: 'また今度',  text: 'また今度'  } },
-    ],
-  },
-} as unknown as Message;
-
 interface FriendRow {
   id: string;
   line_user_id: string;
@@ -84,17 +67,11 @@ export async function processSegmentSend(
         batchMessage = { ...message, text: addMessageVariation(message.text, batchIndex) };
       }
 
-      // survey_followup = 1 の場合はアンケート同意QRを同梱する
-      const messagesToSend: Message[] = [batchMessage];
-      if (broadcast.survey_followup) {
-        messagesToSend.push(SURVEY_INVITE_MESSAGE);
-      }
-
       try {
-        await lineClient.multicast(lineUserIds, messagesToSend);
+        await lineClient.multicast(lineUserIds, [batchMessage]);
         successCount += batch.length;
 
-        // Log successfully sent messages & create survey enrollments
+        // Log successfully sent messages
         for (const friend of batch) {
           const logId = crypto.randomUUID();
           await db
@@ -104,24 +81,6 @@ export async function processSegmentSend(
             )
             .bind(logId, friend.id, broadcast.message_type, broadcast.message_content, broadcastId, now)
             .run();
-
-          // アンケート導線あり → まだアクティブな enrollment がなければ step_order=0 で登録
-          if (broadcast.survey_followup) {
-            await db
-              .prepare(
-                `INSERT INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
-                 SELECT ?, ?, ?, 0, 'active', ?, ?, ?
-                 WHERE NOT EXISTS (
-                   SELECT 1 FROM friend_scenarios
-                   WHERE friend_id = ? AND scenario_id = ? AND status = 'active'
-                 )`,
-              )
-              .bind(
-                crypto.randomUUID(), friend.id, SURVEY_SCENARIO_ID, now, SURVEY_SENTINEL, now,
-                friend.id, SURVEY_SCENARIO_ID,
-              )
-              .run();
-          }
         }
       } catch (err) {
         console.error(`Segment multicast batch ${batchIndex} failed:`, err);
