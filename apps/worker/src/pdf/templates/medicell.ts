@@ -113,7 +113,7 @@ export async function generateMedicellPdf(
   drawText(page, data.severity ?? '', marginLeft + pt(5), currentY, font, 10);
 
   // 人体図（右側）
-  drawBodyFigure(page, figureImage, marginLeft, sectionStartY, contentWidth, 68);
+  drawBodyFigure(page, figureImage, marginLeft, sectionStartY, contentWidth, 62);
 
   currentY -= pt(8);
 
