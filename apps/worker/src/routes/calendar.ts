@@ -74,20 +74,23 @@ calendar.get('/api/integrations/google-calendar/slots', async (c) => {
     const startHour = Number(c.req.query('startHour') ?? '9');
     const endHour = Number(c.req.query('endHour') ?? '18');
 
-    if (!connectionId || !date) {
-      return c.json({ success: false, error: 'connectionId and date are required' }, 400);
+    if (!date) {
+      return c.json({ success: false, error: 'date is required' }, 400);
     }
 
-    const conn = await getCalendarConnectionById(c.env.DB, connectionId);
+    const conn = connectionId
+      ? await getCalendarConnectionById(c.env.DB, connectionId)
+      : (await getCalendarConnections(c.env.DB)).find((item) => Boolean(item.is_active)) ?? null;
     if (!conn) {
-      return c.json({ success: false, error: 'Calendar connection not found' }, 404);
+      const msg = connectionId ? 'Calendar connection not found' : 'No active calendar connection found';
+      return c.json({ success: false, error: msg }, 404);
     }
 
     const dayStart = `${date}T${String(startHour).padStart(2, '0')}:00:00`;
     const dayEnd = `${date}T${String(endHour).padStart(2, '0')}:00:00`;
 
     // 既存D1予約を取得
-    const bookings = await getBookingsInRange(c.env.DB, connectionId, dayStart, dayEnd);
+    const bookings = await getBookingsInRange(c.env.DB, conn.id, dayStart, dayEnd);
 
     // Google FreeBusy API から busy 区間を取得（access_token がある場合のみ）
     let googleBusyIntervals: { start: string; end: string }[] = [];
@@ -174,20 +177,27 @@ calendar.get('/api/integrations/google-calendar/bookings', async (c) => {
 
 calendar.post('/api/integrations/google-calendar/book', async (c) => {
   try {
-    const body = await c.req.json<{ connectionId: string; friendId?: string; title: string; startAt: string; endAt: string; description?: string; metadata?: Record<string, unknown> }>();
-    if (!body.connectionId || !body.title || !body.startAt || !body.endAt) {
-      return c.json({ success: false, error: 'connectionId, title, startAt, endAt are required' }, 400);
+    const body = await c.req.json<{ connectionId?: string; friendId?: string; title: string; startAt: string; endAt: string; description?: string; metadata?: Record<string, unknown> }>();
+    if (!body.title || !body.startAt || !body.endAt) {
+      return c.json({ success: false, error: 'title, startAt, endAt are required' }, 400);
+    }
+
+    // connectionId が未指定の場合は最初のアクティブな接続を使用
+    const conn = body.connectionId
+      ? await getCalendarConnectionById(c.env.DB, body.connectionId)
+      : (await getCalendarConnections(c.env.DB)).find((item) => Boolean(item.is_active)) ?? null;
+    if (!conn) {
+      const msg = body.connectionId ? 'Calendar connection not found' : 'No active calendar connection found';
+      return c.json({ success: false, error: msg }, 404);
     }
 
     // D1 に予約レコードを作成
     const booking = await createCalendarBooking(c.env.DB, {
       ...body,
+      connectionId: conn.id,
       metadata: body.metadata ? JSON.stringify(body.metadata) : undefined,
     });
-
-    // Google Calendar にイベントを作成（access_token がある場合のみ、ベストエフォート）
-    const conn = await getCalendarConnectionById(c.env.DB, body.connectionId);
-    if (conn?.access_token) {
+    if (conn.access_token) {
       try {
         const gcal = new GoogleCalendarClient({
           calendarId: conn.calendar_id,

@@ -37,11 +37,13 @@ import { forms } from './routes/forms.js';
 import { adPlatforms } from './routes/ad-platforms.js';
 import { staff } from './routes/staff.js';
 import { images } from './routes/images.js';
+import { pdfProxy } from './routes/pdf-proxy.js';
 
 export type Env = {
   Bindings: {
     DB: D1Database;
     IMAGES: R2Bucket;
+    PDF_BUCKET: R2Bucket;
     LINE_CHANNEL_SECRET: string;
     LINE_CHANNEL_ACCESS_TOKEN: string;
     API_KEY: string;
@@ -50,7 +52,8 @@ export type Env = {
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
-    X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
+    CLINIC_LINE_USER_ID?: string;
+    X_HARNESS_URL?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -98,6 +101,7 @@ app.route('/', forms);
 app.route('/', adPlatforms);
 app.route('/', staff);
 app.route('/', images);
+app.route('/', pdfProxy);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

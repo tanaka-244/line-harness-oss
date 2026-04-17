@@ -314,9 +314,9 @@ forms.post('/api/forms/:id/submit', async (c) => {
             },
             footer: {
               type: 'box', layout: 'vertical', paddingAll: '16px',
-              contents: [
-                { type: 'button', action: { type: 'message', label: 'アカウント連携を見る', text: 'アカウント連携を見る' }, style: 'primary', color: '#14b8a6' },
-              ],
+              contents: c.env.LIFF_URL ? [
+                { type: 'button', action: { type: 'uri', label: '予約する', uri: `${c.env.LIFF_URL}?page=book` }, style: 'primary', color: '#06C755' },
+              ] : [],
             },
           };
 
