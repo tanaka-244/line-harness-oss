@@ -5,7 +5,8 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Broadcast } from '@line-crm/db';
-import type { LineClient, Message } from '@line-crm/line-sdk';
+import { LineClient } from '@line-crm/line-sdk';
+import type { Message } from '@line-crm/line-sdk';
 import { calculateStaggerDelay, sleep, addMessageVariation } from './stealth.js';
 import { buildSegmentQuery } from './segment-query.js';
 import type { SegmentCondition } from './segment-query.js';
@@ -19,7 +20,7 @@ interface FriendRow {
 
 export async function processSegmentSend(
   db: D1Database,
-  lineClient: LineClient,
+  defaultToken: string,
   broadcastId: string,
   condition: SegmentCondition,
 ): Promise<Broadcast> {
@@ -30,6 +31,17 @@ export async function processSegmentSend(
   if (!broadcast) {
     throw new Error(`Broadcast ${broadcastId} not found`);
   }
+
+  // Resolve LINE client from broadcast's account or fallback to default token
+  let lineClientToken = defaultToken;
+  if (broadcast.line_account_id) {
+    const row = await db
+      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ? AND is_active = 1`)
+      .bind(broadcast.line_account_id)
+      .first<{ channel_access_token: string }>();
+    if (row?.channel_access_token) lineClientToken = row.channel_access_token;
+  }
+  const lineClient = new LineClient(lineClientToken);
 
   const message = buildMessage(broadcast.message_type, broadcast.message_content);
 

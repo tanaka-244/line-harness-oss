@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { verifySignature, LineClient } from '@line-crm/line-sdk';
-import type { WebhookRequestBody, WebhookEvent, TextEventMessage } from '@line-crm/line-sdk';
+import type { WebhookRequestBody, WebhookEvent, TextEventMessage, Message } from '@line-crm/line-sdk';
 import {
   upsertFriend,
   updateFriendFollowStatus,
@@ -12,6 +12,7 @@ import {
   completeFriendScenario,
   upsertChatOnMessage,
   getLineAccounts,
+  addTagToFriend,
   jstNow,
 } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
@@ -244,6 +245,70 @@ async function handleEvent(
     return;
   }
 
+  // ===== ポストバック: survey_a（Flex ボタンによるタグ付け → アンケート導線） =====
+  if (event.type === 'postback') {
+    const userId = event.source.type === 'user' ? event.source.userId : undefined;
+    if (!userId) return;
+
+    const data = (event as unknown as { postback: { data: string } }).postback.data;
+    const params = new URLSearchParams(data);
+    const action = params.get('action');
+    const tagId  = params.get('tagId');
+
+    if (action === 'survey_a' && tagId) {
+      const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+      const SURVEY_SCENARIO_ID = 'a0000000-0000-4000-8000-000000000001';
+
+      let friend = await getFriendByLineUserId(db, userId);
+      if (!friend) {
+        try {
+          const profile = await lineClient.getProfile(userId);
+          friend = await upsertFriend(db, {
+            lineUserId: userId,
+            displayName: profile?.displayName ?? null,
+            pictureUrl:  profile?.pictureUrl  ?? null,
+            statusMessage: profile?.statusMessage ?? null,
+          });
+        } catch {
+          return;
+        }
+      }
+      if (!friend) return;
+
+      const now = jstNow();
+
+      // 1. Aタグを付与
+      await addTagToFriend(db, friend.id, tagId);
+
+      // 2. アンケートシナリオへ事前エントリ（step_order=0 SENTINEL で待機）
+      //    完了メッセージ後のアンケート招待に備えて先に登録しておく
+      await db
+        .prepare(
+          `INSERT INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
+           SELECT ?, ?, ?, 0, 'active', ?, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM friend_scenarios
+             WHERE friend_id = ? AND scenario_id = ? AND status = 'active'
+           )`,
+        )
+        .bind(
+          crypto.randomUUID(), friend.id, SURVEY_SCENARIO_ID, now, SURVEY_SENTINEL, now,
+          friend.id, SURVEY_SCENARIO_ID,
+        )
+        .run();
+
+      // 3. tag_added イベントを発火 → Q2オートメーション（「一番気になるお悩みは？」）を
+      //    replyToken で無料送信 → Q3 → 完了メッセージ → アンケート招待 と連鎖する
+      await fireEvent(db, 'tag_added', {
+        friendId: friend.id,
+        eventData: { tagId },
+        replyToken: event.replyToken,
+      }, lineAccessToken, lineAccountId);
+    }
+    return;
+  }
+  // =====================================================================
+
   if (event.type === 'message') {
     const userId =
       event.source.type === 'user' ? event.source.userId : undefined;
@@ -304,6 +369,30 @@ async function handleEvent(
       )
       .bind(logId, friend.id, incomingText, now)
       .run();
+
+    // ===== 施術後アンケート返答ハンドラ =====
+    // sentinel (9999-12-31) で停止中の survey enrollment があれば返答を処理し早期 return
+    {
+      const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+      const activeSurvey = await db
+        .prepare(
+          `SELECT fs.id, fs.current_step_order FROM friend_scenarios fs
+           JOIN scenarios s ON s.id = fs.scenario_id
+           WHERE fs.friend_id = ? AND s.name = ? AND fs.status = 'active' AND fs.next_delivery_at = ?`,
+        )
+        .bind(friend.id, '施術後アンケート', SURVEY_SENTINEL)
+        .first<{ id: string; current_step_order: number }>();
+
+      if (activeSurvey) {
+        await handleSurveyResponse(db, lineClient, event.replyToken, friend, activeSurvey, incomingText);
+        await fireEvent(db, 'message_received', {
+          friendId: friend.id,
+          eventData: { text: incomingText, matched: true },
+        }, lineAccessToken, lineAccountId);
+        return;
+      }
+    }
+    // ==========================================
 
     // チャットを作成/更新（ユーザーの自発的メッセージのみ unread にする）
     // ボタンタップ等の自動応答キーワードは除外
@@ -464,6 +553,192 @@ async function handleEvent(
     }, lineAccessToken, lineAccountId);
 
     return;
+  }
+}
+
+// ============================================================
+// 施術後アンケート — 会話ハンドラ（3問構成）
+// friend_scenarios.current_step_order の値でステートを管理する
+//   1 → Step 1 送信済み、同意確認待ち（もちろん！ / また今度）
+//   2 → Q1（症状の変化）返答待ち
+//   3 → Q2（院の雰囲気・対応）返答待ち
+//   4 → Q3（再来院意向）返答待ち
+// スコア合計 4以上 → Googleレビュー依頼、3以下 → お礼メッセージのみ
+// ============================================================
+async function handleSurveyResponse(
+  db: D1Database,
+  lineClient: InstanceType<typeof LineClient>,
+  replyToken: string,
+  friend: { id: string; line_user_id: string; display_name: string | null },
+  survey: { id: string; current_step_order: number },
+  incomingText: string,
+): Promise<void> {
+  const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+  // セッションマーカー: この enrollment の回答を横断して合計スコアを集計するため reason に埋め込む
+  const SID = `[sid:${survey.id}]`;
+  const LOW_SCORE_MSG = '貴重なご意見ありがとうございました！\nさらに良い施術ができるよう努めてまいります。\nまたのご来院をお待ちしております😊';
+
+  // 送信ログ共通ヘルパー（インライン）
+  const logOutgoing = async (type: 'text' | 'flex', content: string, ts: string) =>
+    db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, 'reply', ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, type, content, ts)
+      .run();
+
+  // ── ブロードキャスト起点の同意確認（step_order=0）──────────────
+  // ブロードキャストから「最後にひとつだけ…」を受け取り「もちろん！」を返答した場合
+  //   → Q1 を送信して step_order=2 へ進む
+  // 「また今度」
+  //   → お礼メッセージを送信してシナリオを完了
+  if (survey.current_step_order === 0) {
+    if (incomingText === 'もちろん！') {
+      const now = jstNow();
+      const q1Content = '{"text":"施術を受けて、症状はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良くなった👍","text":"とても良くなった👍"}},{"type":"action","action":{"type":"message","label":"少し良くなった","text":"少し良くなった"}},{"type":"action","action":{"type":"message","label":"変わらない","text":"変わらない"}},{"type":"action","action":{"type":"message","label":"悪くなった","text":"悪くなった"}}]}}';
+      await lineClient.replyMessage(replyToken, [buildMessage('text', q1Content)]);
+      await logOutgoing('text', q1Content, now);
+      await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
+    } else if (incomingText === 'また今度') {
+      const now = jstNow();
+      const thankText = 'ありがとうございます！またぜひご協力ください😊';
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: thankText } as Message]);
+      await logOutgoing('text', thankText, now);
+      await completeFriendScenario(db, survey.id);
+    }
+    // その他の入力はスルー（waiting 状態を継続）
+    return;
+  }
+
+  // ── 同意確認（Step 1 送信済み）────────────────────────────────
+  if (survey.current_step_order === 1) {
+    if (incomingText === 'もちろん！') {
+      const now = jstNow();
+      const q1Content = '{"text":"施術を受けて、症状はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良くなった👍","text":"とても良くなった👍"}},{"type":"action","action":{"type":"message","label":"少し良くなった","text":"少し良くなった"}},{"type":"action","action":{"type":"message","label":"変わらない","text":"変わらない"}},{"type":"action","action":{"type":"message","label":"悪くなった","text":"悪くなった"}}]}}';
+      await lineClient.replyMessage(replyToken, [buildMessage('text', q1Content)]);
+      await logOutgoing('text', q1Content, now);
+      await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
+    } else {
+      // また今度 または想定外の返答 → 丁寧にクローズ
+      const now = jstNow();
+      const byeText = 'わかりました！またいつでもご来院をお待ちしております😊';
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: byeText } as Message]);
+      await logOutgoing('text', byeText, now);
+      await completeFriendScenario(db, survey.id);
+    }
+    return;
+  }
+
+  // ── Q1: 症状の変化 ──────────────────────────────────────────
+  if (survey.current_step_order === 2) {
+    const q1ScoreMap: Record<string, number> = {
+      'とても良くなった👍': 2,
+      '少し良くなった':     1,
+      '変わらない':         0,
+      '悪くなった':        -1,
+    };
+    const score = q1ScoreMap[incomingText];
+    if (score === undefined) return; // 想定外は無視（waiting 継続）
+
+    const now = jstNow();
+    await db
+      .prepare(`INSERT INTO friend_scores (id, friend_id, scoring_rule_id, score_change, reason, created_at) VALUES (?, ?, NULL, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), friend.id, score, `施術後アンケートQ1: ${incomingText} ${SID}`, now)
+      .run();
+    await db.prepare(`UPDATE friends SET score = score + ?, updated_at = ? WHERE id = ?`).bind(score, now, friend.id).run();
+
+    const q2Content = '{"text":"院の雰囲気やスタッフの対応はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良かった😊","text":"とても良かった😊"}},{"type":"action","action":{"type":"message","label":"良かった","text":"良かった"}},{"type":"action","action":{"type":"message","label":"普通","text":"普通"}},{"type":"action","action":{"type":"message","label":"改善してほしい","text":"改善してほしい"}}]}}';
+    await lineClient.replyMessage(replyToken, [buildMessage('text', q2Content)]);
+    await logOutgoing('text', q2Content, now);
+    await advanceFriendScenario(db, survey.id, 3, SURVEY_SENTINEL);
+    return;
+  }
+
+  // ── Q2: 院の雰囲気・対応 ────────────────────────────────────
+  if (survey.current_step_order === 3) {
+    const q2ScoreMap: Record<string, number> = {
+      'とても良かった😊': 2,
+      '良かった':         1,
+      '普通':             0,
+      '改善してほしい':  -1,
+    };
+    const score = q2ScoreMap[incomingText];
+    if (score === undefined) return;
+
+    const now = jstNow();
+    await db
+      .prepare(`INSERT INTO friend_scores (id, friend_id, scoring_rule_id, score_change, reason, created_at) VALUES (?, ?, NULL, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), friend.id, score, `施術後アンケートQ2: ${incomingText} ${SID}`, now)
+      .run();
+    await db.prepare(`UPDATE friends SET score = score + ?, updated_at = ? WHERE id = ?`).bind(score, now, friend.id).run();
+
+    const q3Content = '{"text":"またたなか整骨院鍼灸院に来院したいですか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"ぜひまた来たい✨","text":"ぜひまた来たい✨"}},{"type":"action","action":{"type":"message","label":"機会があれば","text":"機会があれば"}},{"type":"action","action":{"type":"message","label":"まだわからない","text":"まだわからない"}}]}}';
+    await lineClient.replyMessage(replyToken, [buildMessage('text', q3Content)]);
+    await logOutgoing('text', q3Content, now);
+    await advanceFriendScenario(db, survey.id, 4, SURVEY_SENTINEL);
+    return;
+  }
+
+  // ── Q3: 再来院意向 ──────────────────────────────────────────
+  if (survey.current_step_order === 4) {
+    const q3ScoreMap: Record<string, number> = {
+      'ぜひまた来たい✨': 2,
+      '機会があれば':     1,
+      'まだわからない':   0,
+    };
+    const score = q3ScoreMap[incomingText];
+    if (score === undefined) return;
+
+    const now = jstNow();
+    await db
+      .prepare(`INSERT INTO friend_scores (id, friend_id, scoring_rule_id, score_change, reason, created_at) VALUES (?, ?, NULL, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), friend.id, score, `施術後アンケートQ3: ${incomingText} ${SID}`, now)
+      .run();
+    await db.prepare(`UPDATE friends SET score = score + ?, updated_at = ? WHERE id = ?`).bind(score, now, friend.id).run();
+
+    // 3問の合計スコアを集計してレビュー依頼か否かを分岐
+    const sumRow = await db
+      .prepare(`SELECT SUM(score_change) AS total FROM friend_scores WHERE friend_id = ? AND reason LIKE ?`)
+      .bind(friend.id, `%${SID}`)
+      .first<{ total: number }>();
+    const totalScore = sumRow?.total ?? 0;
+
+    if (totalScore >= 4) {
+      // Step 5: Google レビュー依頼 Flex（DB の message_content を使用 → 管理画面で URL 変更可能）
+      const step5Row = await db
+        .prepare(
+          `SELECT ss.message_content FROM scenario_steps ss
+           JOIN scenarios s ON s.id = ss.scenario_id
+           WHERE s.name = '施術後アンケート' AND ss.step_order = 5 LIMIT 1`,
+        )
+        .first<{ message_content: string }>();
+
+      const reviewContent = step5Row?.message_content ?? JSON.stringify({
+        type: 'bubble',
+        body: {
+          type: 'box', layout: 'vertical', paddingAll: '20px',
+          contents: [
+            { type: 'text', text: '嬉しいです😊 もしよろしければ、Googleでの口コミ投稿をお願いできますか？私たちの大きな励みになります🙏', size: 'sm', color: '#1e293b', wrap: true },
+          ],
+        },
+        footer: {
+          type: 'box', layout: 'vertical', paddingAll: '16px',
+          contents: [
+            { type: 'button', action: { type: 'uri', label: '口コミを書く', uri: 'https://g.page/r/CRwRXX3LUHkeEBE/review' }, style: 'primary', color: '#06C755' },
+          ],
+        },
+      });
+
+      await lineClient.replyMessage(replyToken, [buildMessage('flex', reviewContent)]);
+      await logOutgoing('flex', reviewContent, now);
+    } else {
+      // 合計スコア 3 以下: お礼メッセージのみ
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: LOW_SCORE_MSG } as Message]);
+      await logOutgoing('text', LOW_SCORE_MSG, now);
+    }
+
+    await completeFriendScenario(db, survey.id);
   }
 }
 
