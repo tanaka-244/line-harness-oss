@@ -78,18 +78,8 @@ export async function generateChronicPdf(
   }
   currentY -= pt(3);
 
-  // ③ 悪化する時
-  drawText(page, '③ 症状が悪化するのはどんな時ですか', marginLeft, currentY, font, 11);
-  currentY -= pt(6);
-  const worseTimeLines = splitLines(data.worse_time ?? '', font, 11, textWidth);
-  for (const line of worseTimeLines) {
-    drawText(page, line, marginLeft + pt(5), currentY, font, 11);
-    currentY -= bodyLineGap;
-  }
-  currentY -= pt(3);
-
-  // ④ 症状の状態と程度
-  drawText(page, '④ 症状の状態と程度', marginLeft, currentY, font, 11);
+  // ③ 症状の状態と程度
+  drawText(page, '③ 症状の状態と程度', marginLeft, currentY, font, 11);
   currentY -= pt(6);
   const statusLines = splitLines(`現在の状態: ${data.current_status ?? ''}`, font, 11, textWidth);
   for (const line of statusLines) {
@@ -103,8 +93,8 @@ export async function generateChronicPdf(
   }
   currentY -= pt(3);
 
-  // ⑤ 希望する施術
-  drawText(page, '⑤ 希望する施術があればお聞かせください', marginLeft, currentY, font, 11);
+  // ④ 希望する施術
+  drawText(page, '④ 希望する施術', marginLeft, currentY, font, 11);
   currentY -= pt(6);
   const preferredTreatmentLines = splitLines(data.preferred_treatment ?? '', font, 11, textWidth);
   for (const line of preferredTreatmentLines) {

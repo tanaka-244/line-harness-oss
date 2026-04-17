@@ -47,7 +47,6 @@ const PDF_TEMPLATE_KEYS: Record<SessionType, string[]> = {
     'phone',
     'symptoms',
     'duration',
-    'worse_time',
     'current_status',
     'severity',
     'preferred_treatment',

@@ -140,15 +140,19 @@ const CHRONIC_STEPS: StepDef[] = [
   },
   { key: 'symptoms', question: 'どのような症状がありますか？（例: 肩こりがひどく、頭痛もある）' },
   { key: 'duration', question: '症状はいつからですか？（例: 3ヶ月以上前から）' },
-  { key: 'worse_time', question: '症状が悪化するのはどんな時ですか？（例: デスクワーク後）' },
-  { key: 'current_status', question: '現在の症状の状態を教えてください（例: 良くなったり悪くなったり）' },
+  { key: 'current_status', question: '現在の症状の状態を教えてください（例: 方が上がらない、寝ていても痛む など）' },
   {
     key: 'severity',
     question: 'つらさの程度を10段階で教えてください（1〜2が弱い、9〜10が強い）',
     quickReplies: ['1〜2', '3〜4', '5〜6', '7〜8', '9〜10'],
     validationMsg: 'いずれかの選択肢を選んでください',
   },
-  { key: 'preferred_treatment', question: 'ご希望の施術があればお聞かせください（なければ「特になし」と入力）' },
+  {
+    key: 'preferred_treatment',
+    question: 'ご希望の施術はありますか？',
+    quickReplies: ['鍼灸', 'メディセル', '整体', '相談して決める'],
+    validationMsg: 'いずれかの選択肢を選んでください',
+  },
   {
     key: 'other_clinic',
     question: '他の病院・整骨院などに通っていますか？',
