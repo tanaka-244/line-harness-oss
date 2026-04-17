@@ -444,7 +444,7 @@ function buildQuickReply(items: string[]): object {
 function buildEntryFlex(): Message {
   return {
     type: 'flex',
-    altText: '予約・ご相談 - 初診・再診・相談するの選択',
+    altText: '予約・ご相談 - 初めての方・2回目以降・メッセージで相談するの選択',
     contents: {
       type: 'bubble',
       header: {
@@ -470,17 +470,17 @@ function buildEntryFlex(): Message {
             type: 'button',
             style: 'primary',
             color: '#06C755',
-            action: { type: 'message', label: '初診', text: '初診' },
+            action: { type: 'message', label: '初めての方（初診）', text: '初めての方（初診）' },
           },
           {
             type: 'button',
             style: 'secondary',
-            action: { type: 'message', label: '再診', text: '再診' },
+            action: { type: 'message', label: '2回目以降（再診）', text: '2回目以降（再診）' },
           },
           {
             type: 'button',
             style: 'secondary',
-            action: { type: 'message', label: '相談する', text: '相談する' },
+            action: { type: 'message', label: 'メッセージで相談する', text: 'メッセージで相談する' },
           },
         ],
       },
@@ -491,7 +491,7 @@ function buildEntryFlex(): Message {
 function buildInitialVisitCategoryFlex(): Message {
   return {
     type: 'flex',
-    altText: '初診 - ご希望の内容を選択',
+    altText: '初診 - ケガの施術・慢性症状・美容鍼・美療メディセルの選択',
     contents: {
       type: 'bubble',
       header: {
@@ -517,17 +517,17 @@ function buildInitialVisitCategoryFlex(): Message {
             type: 'button',
             style: 'primary',
             color: '#06C755',
-            action: { type: 'message', label: 'ケガ(保険)', text: 'ケガ(保険)' },
+            action: { type: 'message', label: 'ケガの施術（保険）', text: 'ケガの施術（保険）' },
           },
           {
             type: 'button',
             style: 'secondary',
-            action: { type: 'message', label: '慢性（自費）', text: '慢性（自費）' },
+            action: { type: 'message', label: '慢性症状（自費）', text: '慢性症状（自費）' },
           },
           {
             type: 'button',
             style: 'secondary',
-            action: { type: 'message', label: '美容・美療', text: '美容・美療' },
+            action: { type: 'message', label: '美容鍼・美療メディセル', text: '美容鍼・美療メディセル' },
           },
         ],
       },
@@ -702,7 +702,7 @@ export async function handleIntakeMessage(
 
     // step -2: 入口（初診 / 再診 / 相談する）
     if (step === -2) {
-      if (incomingText === '初診') {
+      if (incomingText === '初めての方（初診）') {
         await updateIntakeSession(db, activeSession.id, {
           current_step: -1,
           answers: JSON.stringify({ flow_mode: 'initial', selection_stage: 'category' }),
@@ -713,14 +713,14 @@ export async function handleIntakeMessage(
         return true;
       }
 
-      if (incomingText === '再診') {
+      if (incomingText === '2回目以降（再診）') {
         await db.prepare(`UPDATE intake_sessions SET session_type = ?, current_step = 0, answers = ?, updated_at = ? WHERE id = ?`)
           .bind('revisit', JSON.stringify({ flow_mode: 'revisit' }), jstNow(), activeSession.id).run();
         await sendQuestion(lineClient, replyToken, REVISIT_STEPS[0]);
         return true;
       }
 
-      if (incomingText === '相談する') {
+      if (incomingText === 'メッセージで相談する') {
         await db.prepare(`UPDATE intake_sessions SET session_type = ?, current_step = 0, answers = ?, updated_at = ? WHERE id = ?`)
           .bind('consultation', JSON.stringify({ flow_mode: 'consultation' }), jstNow(), activeSession.id).run();
         await sendQuestion(lineClient, replyToken, CONSULTATION_STEPS[0]);
@@ -766,9 +766,9 @@ export async function handleIntakeMessage(
       }
 
       const typeMap: Record<string, SessionType | 'beauty_branch'> = {
-        'ケガ(保険)': 'injury',
-        '慢性（自費）': 'chronic',
-        '美容・美療': 'beauty_branch',
+        'ケガの施術（保険）': 'injury',
+        '慢性症状（自費）': 'chronic',
+        '美容鍼・美療メディセル': 'beauty_branch',
       };
       const chosenType = typeMap[incomingText];
       if (!chosenType) {
