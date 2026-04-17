@@ -384,12 +384,14 @@ async function handleEvent(
         .first<{ id: string; current_step_order: number }>();
 
       if (activeSurvey) {
-        await handleSurveyResponse(db, lineClient, event.replyToken, friend, activeSurvey, incomingText);
-        await fireEvent(db, 'message_received', {
-          friendId: friend.id,
-          eventData: { text: incomingText, matched: true },
-        }, lineAccessToken, lineAccountId);
-        return;
+        const consumed = await handleSurveyResponse(db, lineClient, event.replyToken, friend, activeSurvey, incomingText);
+        if (consumed) {
+          await fireEvent(db, 'message_received', {
+            friendId: friend.id,
+            eventData: { text: incomingText, matched: true },
+          }, lineAccessToken, lineAccountId);
+          return;
+        }
       }
     }
     // ==========================================
@@ -572,7 +574,7 @@ async function handleSurveyResponse(
   friend: { id: string; line_user_id: string; display_name: string | null },
   survey: { id: string; current_step_order: number },
   incomingText: string,
-): Promise<void> {
+): Promise<boolean> {
   const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
   // セッションマーカー: この enrollment の回答を横断して合計スコアを集計するため reason に埋め込む
   const SID = `[sid:${survey.id}]`;
@@ -600,15 +602,17 @@ async function handleSurveyResponse(
       await lineClient.replyMessage(replyToken, [buildMessage('text', q1Content)]);
       await logOutgoing('text', q1Content, now);
       await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
+      return true;
     } else if (incomingText === 'また今度') {
       const now = jstNow();
       const thankText = 'ありがとうございます！またぜひご協力ください😊';
       await lineClient.replyMessage(replyToken, [{ type: 'text', text: thankText } as Message]);
       await logOutgoing('text', thankText, now);
       await completeFriendScenario(db, survey.id);
+      return true;
     }
-    // その他の入力はスルー（waiting 状態を継続）
-    return;
+    // その他の入力はアンケート無関係 → auto-reply に委ねる
+    return false;
   }
 
   // ── 同意確認（Step 1 送信済み）────────────────────────────────
@@ -619,15 +623,17 @@ async function handleSurveyResponse(
       await lineClient.replyMessage(replyToken, [buildMessage('text', q1Content)]);
       await logOutgoing('text', q1Content, now);
       await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
-    } else {
-      // また今度 または想定外の返答 → 丁寧にクローズ
+      return true;
+    } else if (incomingText === 'また今度') {
       const now = jstNow();
       const byeText = 'わかりました！またいつでもご来院をお待ちしております😊';
       await lineClient.replyMessage(replyToken, [{ type: 'text', text: byeText } as Message]);
       await logOutgoing('text', byeText, now);
       await completeFriendScenario(db, survey.id);
+      return true;
     }
-    return;
+    // その他の入力はアンケート無関係 → auto-reply に委ねる
+    return false;
   }
 
   // ── Q1: 症状の変化 ──────────────────────────────────────────
@@ -639,7 +645,7 @@ async function handleSurveyResponse(
       '悪くなった':        -1,
     };
     const score = q1ScoreMap[incomingText];
-    if (score === undefined) return; // 想定外は無視（waiting 継続）
+    if (score === undefined) return false; // 想定外 → auto-reply に委ねる
 
     const now = jstNow();
     await db
@@ -652,7 +658,7 @@ async function handleSurveyResponse(
     await lineClient.replyMessage(replyToken, [buildMessage('text', q2Content)]);
     await logOutgoing('text', q2Content, now);
     await advanceFriendScenario(db, survey.id, 3, SURVEY_SENTINEL);
-    return;
+    return true;
   }
 
   // ── Q2: 院の雰囲気・対応 ────────────────────────────────────
@@ -664,7 +670,7 @@ async function handleSurveyResponse(
       '改善してほしい':  -1,
     };
     const score = q2ScoreMap[incomingText];
-    if (score === undefined) return;
+    if (score === undefined) return false;
 
     const now = jstNow();
     await db
@@ -677,7 +683,7 @@ async function handleSurveyResponse(
     await lineClient.replyMessage(replyToken, [buildMessage('text', q3Content)]);
     await logOutgoing('text', q3Content, now);
     await advanceFriendScenario(db, survey.id, 4, SURVEY_SENTINEL);
-    return;
+    return true;
   }
 
   // ── Q3: 再来院意向 ──────────────────────────────────────────
@@ -688,7 +694,7 @@ async function handleSurveyResponse(
       'まだわからない':   0,
     };
     const score = q3ScoreMap[incomingText];
-    if (score === undefined) return;
+    if (score === undefined) return false;
 
     const now = jstNow();
     await db
@@ -739,7 +745,10 @@ async function handleSurveyResponse(
     }
 
     await completeFriendScenario(db, survey.id);
+    return true;
   }
+
+  return false;
 }
 
 export { webhook };
