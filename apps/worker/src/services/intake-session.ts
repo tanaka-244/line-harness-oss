@@ -1018,7 +1018,7 @@ async function completeSession(
 
   // PDF生成・院通知（ベストエフォート）
   if (env.PDF_BUCKET) {
-    generateAndNotifyPdf(
+    await generateAndNotifyPdf(
       { id: session.id, line_user_id: session.line_user_id, session_type: session.session_type, answers: session.answers },
       {
         PDF_BUCKET: env.PDF_BUCKET,
@@ -1027,5 +1027,7 @@ async function completeSession(
         CLINIC_LINE_USER_ID: env.CLINIC_LINE_USER_ID,
       },
     ).catch((err) => console.error('completeSession: PDF generation failed', err));
+  } else {
+    console.warn('completeSession: PDF_BUCKET is not available; skipping PDF generation');
   }
 }
