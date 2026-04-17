@@ -231,8 +231,7 @@ broadcasts.post('/api/broadcasts/:id/send-segment', async (c) => {
       );
     }
 
-    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-    await processSegmentSend(c.env.DB, lineClient, id, body.conditions);
+    await processSegmentSend(c.env.DB, c.env.LINE_CHANNEL_ACCESS_TOKEN, id, body.conditions);
 
     const result = await getBroadcastById(c.env.DB, id);
     return c.json({ success: true, data: result ? serializeBroadcast(result) : null });

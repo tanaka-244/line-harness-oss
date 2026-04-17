@@ -10,6 +10,8 @@ export interface Broadcast {
   message_content: string;
   target_type: BroadcastTargetType;
   target_tag_id: string | null;
+  line_account_id: string | null;
+  alt_text?: string | null;
   status: BroadcastStatus;
   scheduled_at: string | null;
   sent_at: string | null;
