@@ -318,7 +318,7 @@ const REVISIT_STEPS: StepDef[] = [
   {
     key: 'revisit_category',
     question: '今回のご予約内容を教えてください',
-    quickReplies: ['ケガ・急な痛み', '慢性症状・不調', '美容施術'],
+    quickReplies: ['ケガ・急な痛み', '慢性症状・不調', '美容鍼', '美容メディセル（女性限定）'],
     validationMsg: 'いずれかを選んでください',
   },
   { key: 'name', question: 'お名前または診察券番号をお教えください' },
