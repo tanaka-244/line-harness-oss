@@ -5,7 +5,7 @@ import {
   drawText, drawRect, drawHLine, drawVLine,
   drawHeader,
   drawConsentSection, drawOtherClinic, drawMedicalHistory,
-  drawReferral, drawMemoSection, drawBodyFigure, splitLines,
+  drawReferral, drawMemoSection, drawBodyFigure, splitLines, embedImageAuto,
 } from './base.js';
 import { convertToWareki, convertRelativeDate } from '../utils/wareki.js';
 import { getZipcodeFromAddress } from '../utils/zipcode.js';
@@ -20,8 +20,8 @@ export async function generateInjuryPdf(
   pdfDoc.registerFontkit(fontkit);
 
   const font = await pdfDoc.embedFont(fontBytes);
-  const logoImage = logoBytes ? await pdfDoc.embedJpg(logoBytes) : undefined;
-  const figureImage = figureBytes ? await pdfDoc.embedPng(figureBytes) : undefined;
+  const logoImage = await embedImageAuto(pdfDoc, logoBytes);
+  const figureImage = await embedImageAuto(pdfDoc, figureBytes);
 
   const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
 

@@ -4,7 +4,7 @@ import {
   PAGE_W, PAGE_H, pt,
   drawText, drawHeader,
   drawNameRowBeauty, drawAddressRow, drawConsentSection,
-  drawMemoSection, drawRect, splitLines,
+  drawMemoSection, drawRect, splitLines, embedImageAuto,
 } from './base.js';
 import { convertToWareki } from '../utils/wareki.js';
 import { getZipcodeFromAddress } from '../utils/zipcode.js';
@@ -18,7 +18,7 @@ export async function generateBeautyPdf(
   pdfDoc.registerFontkit(fontkit);
 
   const font = await pdfDoc.embedFont(fontBytes);
-  const logoImage = logoBytes ? await pdfDoc.embedJpg(logoBytes) : undefined;
+  const logoImage = await embedImageAuto(pdfDoc, logoBytes);
 
   const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
 

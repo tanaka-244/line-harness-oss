@@ -1,4 +1,4 @@
-import { PDFPage, PDFFont, PDFImage, rgb } from 'pdf-lib';
+import { PDFDocument, PDFPage, PDFFont, PDFImage, rgb } from 'pdf-lib';
 
 // A4サイズ (points)
 export const PAGE_W = 595.28;
@@ -9,6 +9,22 @@ export const pt = (mm: number) => mm * 2.8346;
 
 // 共通色
 export const BLACK = rgb(0, 0, 0);
+
+/**
+ * 画像バイト列を PNG/JPEG 自動判定で埋め込む
+ */
+export async function embedImageAuto(
+  pdfDoc: PDFDocument,
+  bytes?: ArrayBuffer | null,
+): Promise<PDFImage | undefined> {
+  if (!bytes) return undefined;
+
+  try {
+    return await pdfDoc.embedPng(bytes);
+  } catch {
+    return await pdfDoc.embedJpg(bytes);
+  }
+}
 
 // ---------------------- 共通描画ヘルパー ----------------------
 

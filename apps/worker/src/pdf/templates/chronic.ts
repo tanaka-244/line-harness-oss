@@ -5,7 +5,7 @@ import {
   drawText, drawHeader,
   drawNameRow, drawAddressRow, drawConsentSection,
   drawOtherClinic, drawMedicalHistory, drawReferral,
-  drawMemoSection, drawBodyFigure, splitLines,
+  drawMemoSection, drawBodyFigure, splitLines, embedImageAuto,
 } from './base.js';
 import { convertToWareki } from '../utils/wareki.js';
 import { getZipcodeFromAddress } from '../utils/zipcode.js';
@@ -20,8 +20,8 @@ export async function generateChronicPdf(
   pdfDoc.registerFontkit(fontkit);
 
   const font = await pdfDoc.embedFont(fontBytes);
-  const logoImage = logoBytes ? await pdfDoc.embedJpg(logoBytes) : undefined;
-  const figureImage = figureBytes ? await pdfDoc.embedPng(figureBytes) : undefined;
+  const logoImage = await embedImageAuto(pdfDoc, logoBytes);
+  const figureImage = await embedImageAuto(pdfDoc, figureBytes);
 
   const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
 
