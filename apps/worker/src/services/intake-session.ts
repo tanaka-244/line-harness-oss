@@ -202,7 +202,6 @@ const CHRONIC_STEPS: StepDef[] = [
 ];
 
 const BEAUTY_STEPS: StepDef[] = [
-  { key: 'menu', question: 'ご希望のメニューを教えてください（例: 美容鍼、コース名）' },
   {
     key: 'past_beauty',
     question: '美容鍼を受けたことはありますか？',
@@ -349,7 +348,7 @@ function getTypeLabel(sessionType: SessionType): string {
     injury: '交通事故・ケガ（急性症状）',
     chronic: '肩こり・腰痛など（慢性症状）',
     beauty: '美容鍼',
-    beauty_medicell: '美療メディセル',
+    beauty_medicell: '美療メディセル（女性限定）',
     revisit: '再診',
     consultation: 'ご相談',
   };
@@ -495,7 +494,7 @@ function buildEntryFlex(): Message {
 function buildInitialVisitCategoryFlex(): Message {
   return {
     type: 'flex',
-    altText: '初診 - ケガの施術・慢性症状・美容鍼・美療メディセルの選択',
+    altText: '初診 - ケガの施術・慢性症状・美容鍼・美療メディセル（女性限定）の選択',
     contents: {
       type: 'bubble',
       header: {
@@ -573,7 +572,7 @@ function buildBeautyCategoryFlex(): Message {
           {
             type: 'button',
             style: 'secondary',
-            action: { type: 'message', label: '美療メディセル', text: '美療メディセル' },
+            action: { type: 'message', label: '美療メディセル（女性限定）', text: '美療メディセル（女性限定）' },
           },
         ],
       },
@@ -744,7 +743,7 @@ export async function handleIntakeMessage(
       if (selectionState.selection_stage === 'beauty') {
         const beautyTypeMap: Record<string, SessionType> = {
           '美容鍼': 'beauty',
-          '美療メディセル': 'beauty_medicell',
+          '美療メディセル（女性限定）': 'beauty_medicell',
         };
         const chosenBeautyType = beautyTypeMap[incomingText];
         if (!chosenBeautyType) {
@@ -757,7 +756,10 @@ export async function handleIntakeMessage(
         await updateIntakeSession(db, activeSession.id, {
           status: 'in_progress',
           current_step: 0,
-          answers: JSON.stringify({ session_type_label: getTypeLabel(chosenBeautyType) }),
+          answers: JSON.stringify({
+            session_type_label: getTypeLabel(chosenBeautyType),
+            menu: chosenBeautyType === 'beauty' ? '美容鍼' : '美療メディセル（女性限定）',
+          }),
         });
         await db.prepare(`UPDATE intake_sessions SET session_type = ?, updated_at = ? WHERE id = ?`)
           .bind(chosenBeautyType, jstNow(), activeSession.id).run();
