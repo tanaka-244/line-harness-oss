@@ -37,6 +37,7 @@ import { forms } from './routes/forms.js';
 import { adPlatforms } from './routes/ad-platforms.js';
 import { staff } from './routes/staff.js';
 import { images } from './routes/images.js';
+import { pdfProxy } from './routes/pdf-proxy.js';
 
 export type Env = {
   Bindings: {
@@ -51,6 +52,14 @@ export type Env = {
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
+    FORM_URL_FIRST_INJURY?: string;
+    FORM_URL_FIRST_CHRONIC?: string;
+    FORM_URL_FIRST_BEAUTY?: string;
+    FORM_ENTRY_UID_INJURY?: string;
+    FORM_ENTRY_UID_CHRONIC?: string;
+    FORM_ENTRY_UID_BEAUTY?: string;
+    CLINIC_LINE_USER_ID?: string;
+    PDF_BUCKET: R2Bucket;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -98,6 +107,7 @@ app.route('/', forms);
 app.route('/', adPlatforms);
 app.route('/', staff);
 app.route('/', images);
+app.route('/', pdfProxy);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
@@ -168,16 +178,18 @@ async function scheduled(
     }
   }
 
-  // Run delivery for each account
+  // Run step/reminder delivery for each account
   const jobs = [];
   for (const token of activeTokens) {
     const lineClient = new LineClient(token);
     jobs.push(
       processStepDeliveries(env.DB, lineClient, env.WORKER_URL),
-      processScheduledBroadcasts(env.DB, lineClient, env.WORKER_URL),
       processReminderDeliveries(env.DB, lineClient),
     );
   }
+  // Scheduled broadcasts: run once — each broadcast resolves its own account token
+  // to avoid double-sending when multiple accounts are configured.
+  jobs.push(processScheduledBroadcasts(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, env.WORKER_URL));
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
 

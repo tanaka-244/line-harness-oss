@@ -85,13 +85,15 @@ const spec = {
           title: { type: 'string' },
           messageType: { type: 'string', enum: ['text', 'image', 'flex'] },
           messageContent: { type: 'string' },
-          targetType: { type: 'string', enum: ['all', 'tag'] },
+          altText: { type: 'string', nullable: true },
+          targetType: { type: 'string', enum: ['all', 'tag', 'tag_exclude', 'no_tags'] },
           targetTagId: { type: 'string', nullable: true },
           status: { type: 'string', enum: ['draft', 'scheduled', 'sending', 'sent'] },
           scheduledAt: { type: 'string', nullable: true },
           sentAt: { type: 'string', nullable: true },
           totalCount: { type: 'integer' },
           successCount: { type: 'integer' },
+          lineAccountId: { type: 'string', nullable: true },
           createdAt: { type: 'string', format: 'date-time' },
         },
       },
@@ -212,7 +214,14 @@ const spec = {
     },
     // ── Tags ────────────────────────────────────────────────────────────────
     '/api/tags': {
-      get: { tags: ['Tags'], summary: 'タグ一覧取得', responses: { '200': { description: 'All tags' } } },
+      get: {
+        tags: ['Tags'],
+        summary: 'タグ一覧取得',
+        parameters: [
+          { name: 'lineAccountId', in: 'query', schema: { type: 'string' }, description: '指定時はそのアカウントに紐づく友だちが持つタグのみ返す' },
+        ],
+        responses: { '200': { description: 'All tags or account-scoped tags' } },
+      },
       post: {
         tags: ['Tags'],
         summary: 'タグ作成',
@@ -299,11 +308,18 @@ const spec = {
     },
     // ── Broadcasts ───────────────────────────────────────────────────────────
     '/api/broadcasts': {
-      get: { tags: ['Broadcasts'], summary: '配信一覧取得', responses: { '200': { description: 'All broadcasts' } } },
+      get: {
+        tags: ['Broadcasts'],
+        summary: '配信一覧取得',
+        parameters: [
+          { name: 'lineAccountId', in: 'query', schema: { type: 'string' }, description: '指定時はそのアカウントの配信のみ返す' },
+        ],
+        responses: { '200': { description: 'Broadcasts' } },
+      },
       post: {
         tags: ['Broadcasts'],
         summary: '配信作成',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' }, messageType: { type: 'string' }, messageContent: { type: 'string' }, targetType: { type: 'string' }, targetTagId: { type: 'string' }, scheduledAt: { type: 'string' } }, required: ['title', 'messageType', 'messageContent', 'targetType'] } } } },
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' }, messageType: { type: 'string', enum: ['text', 'image', 'flex'] }, messageContent: { type: 'string' }, altText: { type: 'string' }, targetType: { type: 'string', enum: ['all', 'tag', 'tag_exclude', 'no_tags'] }, targetTagId: { type: 'string' }, scheduledAt: { type: 'string' }, lineAccountId: { type: 'string' } }, required: ['title', 'messageType', 'messageContent', 'targetType'] } } } },
         responses: { '201': { description: 'Broadcast created' } },
       },
     },
@@ -314,7 +330,13 @@ const spec = {
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { '200': { description: 'Broadcast' } },
       },
-      put: { tags: ['Broadcasts'], summary: '配信更新', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Updated' } } },
+      put: {
+        tags: ['Broadcasts'],
+        summary: '配信更新',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' }, messageType: { type: 'string', enum: ['text', 'image', 'flex'] }, messageContent: { type: 'string' }, altText: { type: 'string', nullable: true }, targetType: { type: 'string', enum: ['all', 'tag', 'tag_exclude', 'no_tags'] }, targetTagId: { type: 'string', nullable: true }, scheduledAt: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Updated' } },
+      },
       delete: { tags: ['Broadcasts'], summary: '配信削除', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Deleted' } } },
     },
     '/api/broadcasts/{id}/send': {
@@ -323,6 +345,15 @@ const spec = {
         summary: '即時配信',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { '200': { description: 'Sent' } },
+      },
+    },
+    '/api/broadcasts/{id}/send-segment': {
+      post: {
+        tags: ['Broadcasts'],
+        summary: 'セグメント配信',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { conditions: { type: 'object' } }, required: ['conditions'] } } } },
+        responses: { '200': { description: 'Sent to segment' } },
       },
     },
     // ── Users (UUID Cross-Account) ──────────────────────────────────────────

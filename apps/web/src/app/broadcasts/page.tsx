@@ -55,6 +55,7 @@ export default function BroadcastsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [editingBroadcast, setEditingBroadcast] = useState<ApiBroadcast | null>(null)
   const [sendingId, setSendingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -63,7 +64,7 @@ export default function BroadcastsPage() {
     try {
       const [broadcastsRes, tagsRes] = await Promise.all([
         api.broadcasts.list({ accountId: selectedAccountId || undefined }),
-        api.tags.list(),
+        api.tags.list({ accountId: selectedAccountId || undefined }),
       ])
       if (broadcastsRes.success) setBroadcasts(broadcastsRes.data)
       else setError(broadcastsRes.error)
@@ -86,15 +87,19 @@ export default function BroadcastsPage() {
     setSendingId(broadcast.id)
     try {
       if (broadcast.targetType === 'no_tags') {
-        await api.broadcasts.sendSegment(broadcast.id, { type: 'no_tags' })
-      } else if (broadcast.targetType === 'tag_exclude' && broadcast.targetTagId) {
-        await api.broadcasts.sendSegment(broadcast.id, { type: 'tag_exclude', tagId: broadcast.targetTagId })
+        await api.broadcasts.sendSegment(broadcast.id, { type: 'no_tags' }, { accountId: selectedAccountId || undefined })
+      } else if (broadcast.targetType === 'tag_exclude') {
+        if (!broadcast.targetTagId) {
+          setError('タグ除外配信にはタグの指定が必要です。配信を再作成してください。')
+          return
+        }
+        await api.broadcasts.sendSegment(broadcast.id, { type: 'tag_exclude', tagId: broadcast.targetTagId }, { accountId: selectedAccountId || undefined })
       } else {
-        await api.broadcasts.send(broadcast.id)
+        await api.broadcasts.send(broadcast.id, { accountId: selectedAccountId || undefined })
       }
       load()
-    } catch {
-      setError('送信に失敗しました')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '送信に失敗しました')
     } finally {
       setSendingId(null)
     }
@@ -103,10 +108,35 @@ export default function BroadcastsPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('この配信を削除してもよいですか？')) return
     try {
-      await api.broadcasts.delete(id)
+      await api.broadcasts.delete(id, { accountId: selectedAccountId || undefined })
       load()
-    } catch {
-      setError('削除に失敗しました')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '削除に失敗しました')
+    }
+  }
+
+  const handleDuplicate = async (broadcast: ApiBroadcast) => {
+    try {
+      const res = await api.broadcasts.create({
+        title: `${broadcast.title}（複製）`,
+        messageType: broadcast.messageType,
+        messageContent: broadcast.messageContent,
+        altText: broadcast.altText,
+        targetType: broadcast.targetType,
+        targetTagId: broadcast.targetTagId,
+        scheduledAt: null,
+        status: 'draft',
+        lineAccountId: selectedAccountId ?? null,
+      })
+      if (!res.success) {
+        setError(res.error)
+        return
+      }
+      setShowCreate(false)
+      setEditingBroadcast(res.data)
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '複製に失敗しました')
     }
   }
 
@@ -141,8 +171,19 @@ export default function BroadcastsPage() {
       {showCreate && (
         <BroadcastForm
           tags={tags}
+          accountId={selectedAccountId}
           onSuccess={() => { setShowCreate(false); load() }}
           onCancel={() => setShowCreate(false)}
+        />
+      )}
+
+      {editingBroadcast && (
+        <BroadcastForm
+          tags={tags}
+          accountId={selectedAccountId}
+          initialData={editingBroadcast}
+          onSuccess={() => { setEditingBroadcast(null); load() }}
+          onCancel={() => setEditingBroadcast(null)}
         />
       )}
 
@@ -196,6 +237,7 @@ export default function BroadcastsPage() {
                 const statusInfo = statusConfig[broadcast.status]
                 const tagName = getTagName(broadcast.targetTagId)
                 const isSending = sendingId === broadcast.id
+                const canEditBroadcast = broadcast.status === 'draft' || broadcast.status === 'scheduled'
 
                 return (
                   <tr key={broadcast.id} className="hover:bg-gray-50 transition-colors">
@@ -265,7 +307,18 @@ export default function BroadcastsPage() {
                             {isSending ? '送信中...' : '今すぐ送信'}
                           </button>
                         )}
-                        {(broadcast.status === 'draft' || broadcast.status === 'scheduled') && (
+                        {canEditBroadcast && (
+                          <button
+                            onClick={() => {
+                              setShowCreate(false)
+                              setEditingBroadcast(broadcast)
+                            }}
+                            className="px-3 py-1 min-h-[44px] text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                          >
+                            編集
+                          </button>
+                        )}
+                        {canEditBroadcast && (
                           <button
                             onClick={() => handleDelete(broadcast.id)}
                             className="px-3 py-1 min-h-[44px] text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
@@ -273,6 +326,12 @@ export default function BroadcastsPage() {
                             削除
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDuplicate(broadcast)}
+                          className="px-3 py-1 min-h-[44px] text-xs font-medium text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                        >
+                          複製
+                        </button>
                       </div>
                     </td>
                   </tr>

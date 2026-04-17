@@ -3,6 +3,7 @@ import type {
   Tag,
   Scenario,
   ScenarioStep,
+  FriendScenario,
   ApiResponse,
   PaginatedResponse,
   User,
@@ -58,7 +59,16 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   })
-  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  if (!res.ok) {
+    let message = `API error: ${res.status}`
+    try {
+      const body = await res.json() as { error?: string }
+      if (body?.error) message = body.error
+    } catch {
+      // ignore invalid error body
+    }
+    throw new Error(message)
+  }
   return res.json() as Promise<T>
 }
 
@@ -100,8 +110,10 @@ export const api = {
       }),
   },
   tags: {
-    list: () =>
-      fetchApi<ApiResponse<Tag[]>>('/api/tags'),
+    list: (params?: { accountId?: string }) => {
+      const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
+      return fetchApi<ApiResponse<Tag[]>>('/api/tags' + query)
+    },
     create: (data: { name: string; color: string }) =>
       fetchApi<ApiResponse<Tag>>('/api/tags', {
         method: 'POST',
@@ -147,14 +159,21 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/scenarios/${id}/steps/${stepId}`, {
         method: 'DELETE',
       }),
+    trigger: (data: { friendId: string; scenarioId?: string; scenarioName?: string }) =>
+      fetchApi<ApiResponse<FriendScenario>>('/api/scenarios/trigger', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
   },
   broadcasts: {
     list: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<ApiBroadcast[]>>('/api/broadcasts' + query)
     },
-    get: (id: string) =>
-      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}`),
+    get: (id: string, params?: { accountId?: string }) => {
+      const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
+      return fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}${query}`)
+    },
     create: (data: {
       title: string
       messageType: ApiBroadcast['messageType']
@@ -162,7 +181,9 @@ export const api = {
       targetType: ApiBroadcast['targetType']
       targetTagId?: string | null
       scheduledAt?: string | null
+      altText?: string | null
       status?: ApiBroadcast['status']
+      lineAccountId?: string | null
     }) =>
       fetchApi<ApiResponse<ApiBroadcast>>('/api/broadcasts', {
         method: 'POST',
@@ -177,18 +198,24 @@ export const api = {
         targetType?: ApiBroadcast['targetType']
         targetTagId?: string | null
         scheduledAt?: string | null
-      }
+        altText?: string | null
+      },
+      params?: { accountId?: string }
     ) =>
-      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}`, {
+      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}${params?.accountId ? '?lineAccountId=' + params.accountId : ''}`, {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    delete: (id: string) =>
-      fetchApi<ApiResponse<null>>(`/api/broadcasts/${id}`, { method: 'DELETE' }),
-    send: (id: string) =>
-      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send`, { method: 'POST' }),
-    sendSegment: (id: string, options: { type: 'tag_exclude'; tagId: string } | { type: 'no_tags' }) =>
-      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send-segment`, {
+    delete: (id: string, params?: { accountId?: string }) =>
+      fetchApi<ApiResponse<null>>(`/api/broadcasts/${id}${params?.accountId ? '?lineAccountId=' + params.accountId : ''}`, { method: 'DELETE' }),
+    send: (id: string, params?: { accountId?: string }) =>
+      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send${params?.accountId ? '?lineAccountId=' + params.accountId : ''}`, { method: 'POST' }),
+    sendSegment: (
+      id: string,
+      options: { type: 'tag_exclude'; tagId: string } | { type: 'no_tags' },
+      params?: { accountId?: string },
+    ) =>
+      fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}/send-segment${params?.accountId ? '?lineAccountId=' + params.accountId : ''}`, {
         method: 'POST',
         body: JSON.stringify({
           conditions: {

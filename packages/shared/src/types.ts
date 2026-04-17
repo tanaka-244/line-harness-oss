@@ -155,7 +155,7 @@ export interface Broadcast {
   messageContent: string;
   /** 配信対象種別 */
   targetType: BroadcastTargetType;
-  /** 対象タグID (targetType が 'tag' の場合のみ使用) */
+  /** 対象タグID (targetType が 'tag'/'tag_exclude' の場合のみ使用) */
   targetTagId: string | null;
   /** 配信ステータス */
   status: BroadcastStatus;
@@ -167,8 +167,12 @@ export interface Broadcast {
   totalCount: number;
   /** 配信成功人数 */
   successCount: number;
+  /** Flex 通知などに使う代替テキスト */
+  altText: string | null;
   /** 作成日時 (ISO 8601) */
   createdAt: string;
+  /** 作成アカウントID (マルチアカウント用) */
+  lineAccountId: string | null;
 }
 
 // -----------------------------------------------------------------------------

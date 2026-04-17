@@ -19,6 +19,44 @@ export async function getTags(db: D1Database): Promise<Tag[]> {
   return result.results;
 }
 
+/**
+ * Return only tags that have at least one friend belonging to the given account.
+ * This prevents showing tags from other accounts in the broadcast tag picker.
+ * Security note: the actual friend extraction is also account-scoped, so even
+ * without this filter no cross-account sends can occur — this is a UX guard.
+ */
+export async function getTagsByAccount(
+  db: D1Database,
+  lineAccountId: string | null,
+): Promise<Tag[]> {
+  let result: { results: Tag[] };
+  if (lineAccountId) {
+    result = await db
+      .prepare(
+        `SELECT DISTINCT t.*
+         FROM tags t
+         INNER JOIN friend_tags ft ON ft.tag_id = t.id
+         INNER JOIN friends f ON f.id = ft.friend_id
+         WHERE f.line_account_id = ?
+         ORDER BY t.name ASC`,
+      )
+      .bind(lineAccountId)
+      .all<Tag>();
+  } else {
+    result = await db
+      .prepare(
+        `SELECT DISTINCT t.*
+         FROM tags t
+         INNER JOIN friend_tags ft ON ft.tag_id = t.id
+         INNER JOIN friends f ON f.id = ft.friend_id
+         WHERE f.line_account_id IS NULL
+         ORDER BY t.name ASC`,
+      )
+      .all<Tag>();
+  }
+  return result.results;
+}
+
 export interface CreateTagInput {
   name: string;
   color?: string;
@@ -100,16 +138,25 @@ import type { Friend } from './friends';
 export async function getFriendsByTag(
   db: D1Database,
   tagId: string,
+  lineAccountId?: string | null,
 ): Promise<Friend[]> {
-  const result = await db
-    .prepare(
-      `SELECT f.*
-       FROM friends f
-       INNER JOIN friend_tags ft ON ft.friend_id = f.id
-       WHERE ft.tag_id = ?
-       ORDER BY f.created_at DESC`,
-    )
-    .bind(tagId)
-    .all<Friend>();
+  let sql: string;
+  let result: { results: Friend[] };
+
+  if (lineAccountId !== undefined) {
+    // Strict account filter: only return friends belonging to this account
+    if (lineAccountId) {
+      sql = `SELECT f.* FROM friends f INNER JOIN friend_tags ft ON ft.friend_id = f.id WHERE ft.tag_id = ? AND f.line_account_id = ? ORDER BY f.created_at DESC`;
+      result = await db.prepare(sql).bind(tagId, lineAccountId).all<Friend>();
+    } else {
+      sql = `SELECT f.* FROM friends f INNER JOIN friend_tags ft ON ft.friend_id = f.id WHERE ft.tag_id = ? AND f.line_account_id IS NULL ORDER BY f.created_at DESC`;
+      result = await db.prepare(sql).bind(tagId).all<Friend>();
+    }
+  } else {
+    // No account filter (backward compat)
+    sql = `SELECT f.* FROM friends f INNER JOIN friend_tags ft ON ft.friend_id = f.id WHERE ft.tag_id = ? ORDER BY f.created_at DESC`;
+    result = await db.prepare(sql).bind(tagId).all<Friend>();
+  }
+
   return result.results;
 }

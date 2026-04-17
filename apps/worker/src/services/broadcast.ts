@@ -7,15 +7,33 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Broadcast } from '@line-crm/db';
-import type { LineClient } from '@line-crm/line-sdk';
+import { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { calculateStaggerDelay, sleep, addMessageVariation } from './stealth.js';
+import { processSegmentSend } from './segment-send.js';
+import type { SegmentCondition } from './segment-query.js';
 
 const MULTICAST_BATCH_SIZE = 500;
 
+/** broadcast.line_account_id があればそのトークンで、なければ defaultToken で LineClient を生成 */
+async function resolveLineClient(
+  db: D1Database,
+  lineAccountId: string | null | undefined,
+  defaultToken: string,
+): Promise<LineClient> {
+  if (lineAccountId) {
+    const row = await db
+      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ? AND is_active = 1`)
+      .bind(lineAccountId)
+      .first<{ channel_access_token: string }>();
+    if (row?.channel_access_token) return new LineClient(row.channel_access_token);
+  }
+  return new LineClient(defaultToken);
+}
+
 export async function processBroadcastSend(
   db: D1Database,
-  lineClient: LineClient,
+  defaultToken: string,
   broadcastId: string,
   workerUrl?: string,
 ): Promise<Broadcast> {
@@ -26,6 +44,12 @@ export async function processBroadcastSend(
   if (!broadcast) {
     throw new Error(`Broadcast ${broadcastId} not found`);
   }
+
+  const lineClient = await resolveLineClient(
+    db,
+    (broadcast as unknown as Record<string, unknown>).line_account_id as string | null,
+    defaultToken,
+  );
 
   // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
   let finalType: string = broadcast.message_type;
@@ -111,7 +135,7 @@ export async function processBroadcastSend(
 
 export async function processScheduledBroadcasts(
   db: D1Database,
-  lineClient: LineClient,
+  defaultToken: string,
   workerUrl?: string,
 ): Promise<void> {
   const now = jstNow();
@@ -127,7 +151,22 @@ export async function processScheduledBroadcasts(
 
   for (const broadcast of scheduled) {
     try {
-      await processBroadcastSend(db, lineClient, broadcast.id, workerUrl);
+      if (broadcast.target_type === 'no_tags') {
+        const condition: SegmentCondition = { operator: 'AND', rules: [{ type: 'no_tags', value: true }] };
+        await processSegmentSend(db, defaultToken, broadcast.id, condition);
+      } else if (broadcast.target_type === 'tag_exclude') {
+        if (!broadcast.target_tag_id) {
+          console.error(`Scheduled broadcast ${broadcast.id} has target_type=tag_exclude but no target_tag_id; skipping`);
+          continue;
+        }
+        const condition: SegmentCondition = {
+          operator: 'AND',
+          rules: [{ type: 'tag_not_exists', value: broadcast.target_tag_id }],
+        };
+        await processSegmentSend(db, defaultToken, broadcast.id, condition);
+      } else {
+        await processBroadcastSend(db, defaultToken, broadcast.id, workerUrl);
+      }
     } catch (err) {
       console.error(`Failed to send scheduled broadcast ${broadcast.id}:`, err);
       // Continue with next broadcast

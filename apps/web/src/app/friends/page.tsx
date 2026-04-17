@@ -82,14 +82,12 @@ export default function FriendsPage() {
   }, [])
 
   useEffect(() => {
-    setPage(1)
-  }, [selectedTagId, selectedAccountId])
-
-  useEffect(() => {
+    if (accountLoading || !selectedAccountId) return
     loadFriends()
-  }, [page, selectedAccountId, accountLoading])
+  }, [accountLoading, page, selectedTagId, selectedAccountId, loadFriends])
 
   const handleTagFilter = (tagId: string) => {
+    setPage(1)
     setSelectedTagId(tagId)
   }
   return (

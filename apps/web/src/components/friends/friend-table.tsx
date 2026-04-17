@@ -18,6 +18,25 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
   const [selectedTagId, setSelectedTagId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [surveyStatus, setSurveyStatus] = useState<Record<string, 'idle' | 'sending' | 'sent' | 'error'>>({})
+  const [surveyErrors, setSurveyErrors] = useState<Record<string, string>>({})
+
+  const handleSendSurvey = async (friendId: string) => {
+    setSurveyStatus((prev) => ({ ...prev, [friendId]: 'sending' }))
+    setSurveyErrors((prev) => ({ ...prev, [friendId]: '' }))
+
+    try {
+      await api.scenarios.trigger({
+        friendId,
+        scenarioName: '施術後アンケート',
+      })
+      setSurveyStatus((prev) => ({ ...prev, [friendId]: 'sent' }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '送信に失敗しました'
+      setSurveyStatus((prev) => ({ ...prev, [friendId]: 'error' }))
+      setSurveyErrors((prev) => ({ ...prev, [friendId]: message }))
+    }
+  }
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id)
@@ -188,6 +207,50 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         <div>
                           <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
                           <p className="text-xs text-gray-600 font-mono">{friend.lineUserId}</p>
+                        </div>
+
+                        <div className="pt-1 border-t border-gray-200">
+                          <p className="text-xs font-semibold text-gray-500 mb-2">アクション</p>
+                          {surveyStatus[friend.id] === 'sent' ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              アンケートを送信しました
+                            </span>
+                          ) : (
+                            <div className="space-y-2">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); void handleSendSurvey(friend.id) }}
+                                disabled={surveyStatus[friend.id] === 'sending' || !friend.isFollowing}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md text-white disabled:opacity-50 transition-opacity"
+                                style={{ backgroundColor: '#06C755' }}
+                                title={!friend.isFollowing ? 'フォロー中のユーザーのみ送信可能' : undefined}
+                              >
+                                {surveyStatus[friend.id] === 'sending' ? (
+                                  <>
+                                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                    </svg>
+                                    送信中...
+                                  </>
+                                ) : (
+                                  <>
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    施術後アンケートを送信
+                                  </>
+                                )}
+                              </button>
+                              {surveyStatus[friend.id] === 'error' && (
+                                <p className="text-xs text-red-600">
+                                  {surveyErrors[friend.id] || '送信に失敗しました。再度お試しください。'}
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         {/* Tag management */}

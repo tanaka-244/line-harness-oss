@@ -19,5 +19,9 @@ database_id = "07b0072c-b721-4135-bb22-c3cb1bed4abe"
 binding = "IMAGES"
 bucket_name = "line-harness-images"
 
+[[r2_buckets]]
+binding = "PDF_BUCKET"
+bucket_name = "tanaka-seikotsu-pdf"
+
 [triggers]
 crons = ["*/5 * * * *"]

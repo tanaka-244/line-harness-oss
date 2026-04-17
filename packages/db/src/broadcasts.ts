@@ -1,5 +1,5 @@
 import { jstNow } from './utils.js';
-export type BroadcastTargetType = 'all' | 'tag';
+export type BroadcastTargetType = 'all' | 'tag' | 'tag_exclude' | 'no_tags';
 export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent';
 export type BroadcastMessageType = 'text' | 'image' | 'flex';
 
@@ -15,7 +15,11 @@ export interface Broadcast {
   sent_at: string | null;
   total_count: number;
   success_count: number;
+  /** 配信後にアンケート同意QRを追加送信し受信者をシナリオへ自動エントリするフラグ */
+  survey_followup: number;
   created_at: string;
+  line_account_id: string | null;
+  alt_text: string | null;
 }
 
 export async function getBroadcasts(db: D1Database): Promise<Broadcast[]> {
@@ -42,6 +46,7 @@ export interface CreateBroadcastInput {
   targetType: BroadcastTargetType;
   targetTagId?: string | null;
   scheduledAt?: string | null;
+  lineAccountId?: string | null;
 }
 
 export async function createBroadcast(
@@ -56,8 +61,8 @@ export async function createBroadcast(
   await db
     .prepare(
       `INSERT INTO broadcasts
-         (id, title, message_type, message_content, target_type, target_tag_id, status, scheduled_at, sent_at, total_count, success_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?)`,
+         (id, title, message_type, message_content, target_type, target_tag_id, status, scheduled_at, sent_at, total_count, success_count, created_at, line_account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?)`,
     )
     .bind(
       id,
@@ -69,6 +74,7 @@ export async function createBroadcast(
       initialStatus,
       input.scheduledAt ?? null,
       now,
+      input.lineAccountId ?? null,
     )
     .run();
 

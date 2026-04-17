@@ -8,7 +8,10 @@ export interface SegmentCondition {
   rules: SegmentRule[]
 }
 
-export function buildSegmentQuery(condition: SegmentCondition): { sql: string; bindings: unknown[] } {
+export function buildSegmentQuery(
+  condition: SegmentCondition,
+  lineAccountId?: string | null,
+): { sql: string; bindings: unknown[] } {
   const bindings: unknown[] = []
   const clauses: string[] = []
 
@@ -97,8 +100,24 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
   }
 
   const separator = condition.operator === 'AND' ? ' AND ' : ' OR '
-  const where = clauses.length > 0 ? clauses.join(separator) : '1=1'
+  const segmentWhere = clauses.length > 0 ? `(${clauses.join(separator)})` : null
+
+  // Account filter: prevent cross-account friend leakage
+  const accountBindings: unknown[] = []
+  let accountWhere: string | null = null
+  if (lineAccountId !== undefined) {
+    if (lineAccountId) {
+      accountWhere = 'f.line_account_id = ?'
+      accountBindings.push(lineAccountId)
+    } else {
+      accountWhere = 'f.line_account_id IS NULL'
+    }
+  }
+
+  const allClauses = [accountWhere, segmentWhere, 'f.is_following = 1'].filter(Boolean)
+  const where = allClauses.length > 0 ? allClauses.join(' AND ') : '1=1'
   const sql = `SELECT f.id, f.line_user_id FROM friends f WHERE ${where}`
 
-  return { sql, bindings }
+  // Account bindings come first, then segment rule bindings
+  return { sql, bindings: [...accountBindings, ...bindings] }
 }

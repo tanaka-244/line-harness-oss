@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api, type ApiBroadcast } from '@/lib/api'
 import FlexPreviewComponent from '@/components/flex-preview'
 
 interface BroadcastFormProps {
   tags: Tag[]
+  accountId?: string | null
+  initialData?: ApiBroadcast | null
   onSuccess: () => void
   onCancel: () => void
 }
@@ -21,28 +23,71 @@ interface FormState {
   title: string
   messageType: ApiBroadcast['messageType']
   messageContent: string
+  altText: string
   targetType: ApiBroadcast['targetType']
   targetTagId: string
   scheduledAt: string
   sendNow: boolean
 }
 
-export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFormProps) {
-  const [form, setForm] = useState<FormState>({
-    title: '',
-    messageType: 'text',
-    messageContent: '',
-    targetType: 'all',
-    targetTagId: '',
-    scheduledAt: '',
-    sendNow: true,
-  })
+function toDatetimeLocal(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const jst = new Date(date.getTime() + (9 * 60 * 60 * 1000))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())}T${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`
+}
+
+function toFormState(broadcast?: ApiBroadcast | null): FormState {
+  if (!broadcast) {
+    return {
+      title: '',
+      messageType: 'text',
+      messageContent: '',
+      altText: '',
+      targetType: 'all',
+      targetTagId: '',
+      scheduledAt: '',
+      sendNow: true,
+    }
+  }
+
+  return {
+    title: broadcast.title,
+    messageType: broadcast.messageType,
+    messageContent: broadcast.messageContent,
+    altText: broadcast.altText ?? '',
+    targetType: broadcast.targetType,
+    targetTagId: broadcast.targetTagId ?? '',
+    scheduledAt: toDatetimeLocal(broadcast.scheduledAt),
+    sendNow: !broadcast.scheduledAt,
+  }
+}
+
+export default function BroadcastForm({ tags, accountId, initialData, onSuccess, onCancel }: BroadcastFormProps) {
+  const [form, setForm] = useState<FormState>(() => toFormState(initialData))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const isEdit = Boolean(initialData)
+
+  useEffect(() => {
+    setForm(toFormState(initialData))
+    setError('')
+  }, [initialData])
+
+  const selectableTags = useMemo(() => {
+    if (!form.targetTagId || tags.some((tag) => tag.id === form.targetTagId)) return tags
+    return [{ id: form.targetTagId, name: '現在のタグ', color: '#9CA3AF', createdAt: '' }, ...tags]
+  }, [form.targetTagId, tags])
 
   const handleSave = async () => {
     if (!form.title.trim()) { setError('配信タイトルを入力してください'); return }
     if (!form.messageContent.trim()) { setError('メッセージ内容を入力してください'); return }
+    if ((form.targetType === 'tag' || form.targetType === 'tag_exclude') && selectableTags.length === 0) {
+      setError('このアカウントにはタグ付き友だちがまだいないため、タグ配信は作成できません。')
+      return
+    }
     if (form.messageType === 'flex') {
       try { JSON.parse(form.messageContent) } catch { setError('FlexメッセージのJSONが無効です'); return }
     }
@@ -54,27 +99,31 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
     setSaving(true)
     setError('')
     try {
-      const res = await api.broadcasts.create({
+      const payload = {
         title: form.title,
         messageType: form.messageType,
         messageContent: form.messageContent,
+        altText: form.altText.trim() || null,
         targetType: form.targetType,
         targetTagId: (form.targetType === 'tag' || form.targetType === 'tag_exclude') ? form.targetTagId || null : null,
-        // no_tags: targetTagId is null (no tag needed)
-        status: 'draft',
-        // datetime-local returns YYYY-MM-DDTHH:mm in JST wall-clock time
-        // Append +09:00 so new Date() parses correctly for epoch comparisons
         scheduledAt: form.sendNow || !form.scheduledAt
           ? null
           : form.scheduledAt + ':00.000+09:00',
-      })
+      }
+      const res = initialData
+        ? await api.broadcasts.update(initialData.id, payload, { accountId: accountId || undefined })
+        : await api.broadcasts.create({
+            ...payload,
+            status: 'draft',
+            lineAccountId: accountId ?? null,
+          })
       if (res.success) {
         onSuccess()
       } else {
         setError(res.error)
       }
-    } catch {
-      setError('作成に失敗しました')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '作成に失敗しました')
     } finally {
       setSaving(false)
     }
@@ -82,7 +131,9 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-      <h2 className="text-sm font-semibold text-gray-800 mb-5">新規配信を作成</h2>
+      <h2 className="text-sm font-semibold text-gray-800 mb-5">
+        {isEdit ? '配信を編集' : '新規配信を作成'}
+      </h2>
 
       <div className="space-y-4 max-w-lg">
         {/* Title */}
@@ -193,6 +244,22 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
           )}
         </div>
 
+        {(form.messageType === 'flex' || form.messageType === 'image') && (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              通知テキスト
+            </label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              placeholder="未入力時は内容から自動生成"
+              value={form.altText}
+              onChange={(e) => setForm({ ...form, altText: e.target.value })}
+            />
+            <p className="text-xs text-gray-400 mt-1">LINE の通知や一覧で見える代替テキストです。</p>
+          </div>
+        )}
+
         {/* Target */}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-2">配信対象</label>
@@ -247,16 +314,22 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
           )}
           {(form.targetType === 'tag' || form.targetType === 'tag_exclude') && (
             <>
+              {selectableTags.length === 0 ? (
+                <p className="text-xs text-amber-700 mb-1">
+                  このアカウントにはまだタグ付き友だちがいません。先に友だちへタグを付けると、タグ配信を作成できます。
+                </p>
+              ) : null}
               {form.targetType === 'tag_exclude' && (
                 <p className="text-xs text-orange-600 mb-1">このタグを持っていない人に配信します</p>
               )}
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                 value={form.targetTagId}
+                disabled={selectableTags.length === 0}
                 onChange={(e) => setForm({ ...form, targetTagId: e.target.value })}
               >
-                <option value="">タグを選択...</option>
-                {tags.map((tag) => (
+                <option value="">{selectableTags.length === 0 ? '利用可能なタグがありません' : 'タグを選択...'}</option>
+                {selectableTags.map((tag) => (
                   <option key={tag.id} value={tag.id}>{tag.name}</option>
                 ))}
               </select>
@@ -312,7 +385,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
             style={{ backgroundColor: '#06C755' }}
           >
-            {saving ? '作成中...' : '作成'}
+            {saving ? (isEdit ? '更新中...' : '作成中...') : (isEdit ? '更新' : '作成')}
           </button>
           <button
             onClick={onCancel}

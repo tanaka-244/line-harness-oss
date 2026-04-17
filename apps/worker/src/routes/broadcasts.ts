@@ -7,13 +7,29 @@ import {
   deleteBroadcast,
 } from '@line-crm/db';
 import type { Broadcast as DbBroadcast, BroadcastMessageType, BroadcastTargetType } from '@line-crm/db';
-import { LineClient } from '@line-crm/line-sdk';
 import { processBroadcastSend } from '../services/broadcast.js';
 import { processSegmentSend } from '../services/segment-send.js';
 import type { SegmentCondition } from '../services/segment-query.js';
 import type { Env } from '../index.js';
 
 const broadcasts = new Hono<Env>();
+
+function assertAccountAccess(c: any, broadcast: DbBroadcast): boolean {
+  const lineAccountId = c.req.query('lineAccountId');
+  if (!lineAccountId) return true;
+  return broadcast.line_account_id === lineAccountId;
+}
+
+function getDeliveryErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return 'Internal server error';
+  if (err.message.includes('requires line_account_id')) {
+    return '配信アカウントが未設定です。配信を作り直してください。';
+  }
+  if (err.message.includes('was not found for broadcast delivery') || err.message.includes('was not found for segment delivery')) {
+    return '配信アカウントが見つかりません。アカウント設定を確認してください。';
+  }
+  return 'Internal server error';
+}
 
 function serializeBroadcast(row: DbBroadcast) {
   return {
@@ -28,7 +44,9 @@ function serializeBroadcast(row: DbBroadcast) {
     sentAt: row.sent_at,
     totalCount: row.total_count,
     successCount: row.success_count,
+    altText: row.alt_text,
     createdAt: row.created_at,
+    lineAccountId: row.line_account_id,
   };
 }
 
@@ -38,8 +56,12 @@ broadcasts.get('/api/broadcasts', async (c) => {
     const lineAccountId = c.req.query('lineAccountId');
     let items: DbBroadcast[];
     if (lineAccountId) {
+      // Strict account scope: only this account's broadcasts.
+      // Broadcasts with line_account_id IS NULL are legacy/unassigned and must NOT
+      // be shown in an account-scoped view — doing so would allow sending them with
+      // the wrong token when a different account is selected.
       const result = await c.env.DB
-        .prepare(`SELECT * FROM broadcasts WHERE line_account_id = ? OR line_account_id IS NULL ORDER BY created_at DESC`)
+        .prepare(`SELECT * FROM broadcasts WHERE line_account_id = ? ORDER BY created_at DESC`)
         .bind(lineAccountId)
         .all<DbBroadcast>();
       items = result.results;
@@ -59,7 +81,7 @@ broadcasts.get('/api/broadcasts/:id', async (c) => {
     const id = c.req.param('id');
     const broadcast = await getBroadcastById(c.env.DB, id);
 
-    if (!broadcast) {
+    if (!broadcast || !assertAccountAccess(c, broadcast)) {
       return c.json({ success: false, error: 'Broadcast not found' }, 404);
     }
 
@@ -91,9 +113,9 @@ broadcasts.post('/api/broadcasts', async (c) => {
       );
     }
 
-    if (body.targetType === 'tag' && !body.targetTagId) {
+    if ((body.targetType === 'tag' || body.targetType === 'tag_exclude') && !body.targetTagId) {
       return c.json(
-        { success: false, error: 'targetTagId is required when targetType is "tag"' },
+        { success: false, error: 'targetTagId is required when targetType is "tag" or "tag_exclude"' },
         400,
       );
     }
@@ -105,17 +127,13 @@ broadcasts.post('/api/broadcasts', async (c) => {
       targetType: body.targetType,
       targetTagId: body.targetTagId ?? null,
       scheduledAt: body.scheduledAt ?? null,
+      lineAccountId: body.lineAccountId ?? null,
     });
 
-    // Save line_account_id and alt_text if provided
-    const updates: string[] = [];
-    const binds: unknown[] = [];
-    if (body.lineAccountId) { updates.push('line_account_id = ?'); binds.push(body.lineAccountId); }
-    if (body.altText) { updates.push('alt_text = ?'); binds.push(body.altText); }
-    if (updates.length > 0) {
-      binds.push(broadcast.id);
-      await c.env.DB.prepare(`UPDATE broadcasts SET ${updates.join(', ')} WHERE id = ?`)
-        .bind(...binds).run();
+    // Save alt_text if provided (separate column not in createBroadcast)
+    if (body.altText) {
+      await c.env.DB.prepare(`UPDATE broadcasts SET alt_text = ? WHERE id = ?`)
+        .bind(body.altText, broadcast.id).run();
     }
 
     return c.json({ success: true, data: serializeBroadcast(broadcast) }, 201);
@@ -131,7 +149,7 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);
 
-    if (!existing) {
+    if (!existing || !assertAccountAccess(c, existing)) {
       return c.json({ success: false, error: 'Broadcast not found' }, 404);
     }
 
@@ -146,6 +164,7 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
       targetType?: BroadcastTargetType;
       targetTagId?: string | null;
       scheduledAt?: string | null;
+      altText?: string | null;
     }>();
 
     // Keep status in sync with scheduledAt changes
@@ -164,7 +183,14 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
       ...(statusUpdate !== undefined ? { status: statusUpdate } : {}),
     });
 
-    return c.json({ success: true, data: updated ? serializeBroadcast(updated) : null });
+    if (body.altText !== undefined) {
+      await c.env.DB.prepare(`UPDATE broadcasts SET alt_text = ? WHERE id = ?`)
+        .bind(body.altText, id)
+        .run();
+    }
+
+    const refreshed = await getBroadcastById(c.env.DB, id);
+    return c.json({ success: true, data: refreshed ? serializeBroadcast(refreshed) : null });
   } catch (err) {
     console.error('PUT /api/broadcasts/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
@@ -175,6 +201,10 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
 broadcasts.delete('/api/broadcasts/:id', async (c) => {
   try {
     const id = c.req.param('id');
+    const existing = await getBroadcastById(c.env.DB, id);
+    if (!existing || !assertAccountAccess(c, existing)) {
+      return c.json({ success: false, error: 'Broadcast not found' }, 404);
+    }
     await deleteBroadcast(c.env.DB, id);
     return c.json({ success: true, data: null });
   } catch (err) {
@@ -189,7 +219,7 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);
 
-    if (!existing) {
+    if (!existing || !assertAccountAccess(c, existing)) {
       return c.json({ success: false, error: 'Broadcast not found' }, 404);
     }
 
@@ -197,14 +227,13 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
       return c.json({ success: false, error: 'Broadcast is already sent or sending' }, 400);
     }
 
-    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-    await processBroadcastSend(c.env.DB, lineClient, id, c.env.WORKER_URL);
+    await processBroadcastSend(c.env.DB, c.env.LINE_CHANNEL_ACCESS_TOKEN, id, c.env.WORKER_URL);
 
     const result = await getBroadcastById(c.env.DB, id);
     return c.json({ success: true, data: result ? serializeBroadcast(result) : null });
   } catch (err) {
     console.error('POST /api/broadcasts/:id/send error:', err);
-    return c.json({ success: false, error: 'Internal server error' }, 500);
+    return c.json({ success: false, error: getDeliveryErrorMessage(err) }, 500);
   }
 });
 
@@ -214,7 +243,7 @@ broadcasts.post('/api/broadcasts/:id/send-segment', async (c) => {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);
 
-    if (!existing) {
+    if (!existing || !assertAccountAccess(c, existing)) {
       return c.json({ success: false, error: 'Broadcast not found' }, 404);
     }
 
@@ -231,14 +260,13 @@ broadcasts.post('/api/broadcasts/:id/send-segment', async (c) => {
       );
     }
 
-    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-    await processSegmentSend(c.env.DB, lineClient, id, body.conditions);
+    await processSegmentSend(c.env.DB, c.env.LINE_CHANNEL_ACCESS_TOKEN, id, body.conditions);
 
     const result = await getBroadcastById(c.env.DB, id);
     return c.json({ success: true, data: result ? serializeBroadcast(result) : null });
   } catch (err) {
     console.error('POST /api/broadcasts/:id/send-segment error:', err);
-    return c.json({ success: false, error: 'Internal server error' }, 500);
+    return c.json({ success: false, error: getDeliveryErrorMessage(err) }, 500);
   }
 });
 

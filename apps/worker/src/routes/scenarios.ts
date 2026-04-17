@@ -10,18 +10,88 @@ import {
   deleteScenarioStep,
   enrollFriendInScenario,
   getFriendById,
+  getScenarioSteps,
+  advanceFriendScenario,
+  jstNow,
+  getLineAccountById,
 } from '@line-crm/db';
 import type {
   Scenario as DbScenario,
+  ScenarioWithSteps as DbScenarioWithSteps,
   ScenarioWithStepCount as DbScenarioWithStepCount,
   ScenarioStep as DbScenarioStep,
   FriendScenario as DbFriendScenario,
   ScenarioTriggerType,
   MessageType,
 } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
+import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const scenarios = new Hono<Env>();
+const SURVEY_SCENARIO_ID = 'a0000000-0000-4000-8000-000000000001';
+const SURVEY_SCENARIO_NAME = '施術後アンケート';
+const SURVEY_SENTINEL = '9999-12-31T00:00:00+09:00';
+
+async function ensurePostTreatmentSurveyScenario(db: D1Database): Promise<DbScenarioWithSteps | null> {
+  let scenario = await getScenarioById(db, SURVEY_SCENARIO_ID);
+  if (!scenario) {
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO scenarios (id, name, description, trigger_type, trigger_tag_id, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, 'manual', NULL, 1, strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'), strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))`,
+      )
+      .bind(
+        SURVEY_SCENARIO_ID,
+        SURVEY_SCENARIO_NAME,
+        '施術後に患者の満足度を確認し、高評価の場合はGoogleレビューを依頼する',
+      )
+      .run();
+  }
+
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO scenario_steps (id, scenario_id, step_order, delay_minutes, message_type, message_content, condition_type, condition_value, next_step_on_false, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))`,
+    )
+    .bind(
+      'b0000000-0000-4000-8000-000000000001',
+      SURVEY_SCENARIO_ID,
+      1,
+      'text',
+      '{"text":"いつもご来院ありがとうございます😊\\n少しだけアンケートにご協力いただけますか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"もちろん！","text":"もちろん！"}},{"type":"action","action":{"type":"message","label":"また今度","text":"また今度"}}]}}',
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO scenario_steps (id, scenario_id, step_order, delay_minutes, message_type, message_content, condition_type, condition_value, next_step_on_false, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))`,
+    )
+    .bind(
+      'b0000000-0000-4000-8000-000000000002',
+      SURVEY_SCENARIO_ID,
+      2,
+      'text',
+      '{"text":"施術を受けて、症状はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良くなった👍","text":"とても良くなった👍"}},{"type":"action","action":{"type":"message","label":"少し良くなった","text":"少し良くなった"}},{"type":"action","action":{"type":"message","label":"変わらない","text":"変わらない"}},{"type":"action","action":{"type":"message","label":"悪くなった","text":"悪くなった"}}]}}',
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO scenario_steps (id, scenario_id, step_order, delay_minutes, message_type, message_content, condition_type, condition_value, next_step_on_false, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))`,
+    )
+    .bind(
+      'b0000000-0000-4000-8000-000000000003',
+      SURVEY_SCENARIO_ID,
+      3,
+      'flex',
+      '{"type":"bubble","body":{"type":"box","layout":"vertical","paddingAll":"20px","contents":[{"type":"text","text":"嬉しいです😊 もしよろしければ、Googleでの口コミ投稿をお願いできますか？\\n私たちの大きな励みになります🙏","size":"sm","color":"#1e293b","wrap":true}]},"footer":{"type":"box","layout":"vertical","paddingAll":"16px","contents":[{"type":"button","action":{"type":"uri","label":"口コミを書く","uri":"https://g.page/r/CRwRXX3LUHkeEBE/review"},"style":"primary","color":"#06C755"}]}}',
+    )
+    .run();
+
+  scenario = await getScenarioById(db, SURVEY_SCENARIO_ID);
+  return scenario;
+}
 
 /** Convert D1 snake_case Scenario row to shared camelCase shape */
 function serializeScenario(row: DbScenario) {
@@ -320,6 +390,141 @@ scenarios.post('/api/scenarios/:id/enroll/:friendId', async (c) => {
   } catch (err) {
     console.error('POST /api/scenarios/:id/enroll/:friendId error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/scenarios/trigger - manually trigger a scenario and send its first step immediately
+scenarios.post('/api/scenarios/trigger', async (c) => {
+  try {
+    const body = await c.req.json<{
+      friendId: string;
+      scenarioId?: string;
+      scenarioName?: string;
+    }>();
+
+    if (!body.friendId) {
+      return c.json({ success: false, error: 'friendId is required' }, 400);
+    }
+    if (!body.scenarioId && !body.scenarioName) {
+      return c.json({ success: false, error: 'scenarioId or scenarioName is required' }, 400);
+    }
+
+    const db = c.env.DB;
+
+    let scenario: DbScenarioWithSteps | null = null;
+    if (body.scenarioId) {
+      scenario = await getScenarioById(db, body.scenarioId);
+    } else if (body.scenarioName) {
+      if (body.scenarioName === SURVEY_SCENARIO_NAME) {
+        scenario = await ensurePostTreatmentSurveyScenario(db);
+      }
+      const scenarioRow = await db
+        .prepare(`SELECT id FROM scenarios WHERE name = ? LIMIT 1`)
+        .bind(body.scenarioName)
+        .first<{ id: string }>();
+      if (!scenario && scenarioRow?.id) {
+        scenario = await getScenarioById(db, scenarioRow.id);
+      }
+    }
+
+    if (!scenario) {
+      console.error('POST /api/scenarios/trigger: scenario not found', body);
+      return c.json({
+        success: false,
+        error: 'Scenario not found: 施術後アンケートのシナリオがDBにありません。013_survey_scenario.sql を適用してください。',
+      }, 404);
+    }
+
+    const friend = await getFriendById(db, body.friendId);
+    if (!friend) {
+      console.error('POST /api/scenarios/trigger: friend not found', body);
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const existing = await db
+      .prepare(
+        `SELECT id, current_step_order, next_delivery_at, status FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ? AND status = 'active'`,
+      )
+      .bind(friend.id, scenario.id)
+      .first<{ id: string; current_step_order: number; next_delivery_at: string | null; status: string }>();
+
+    const steps = scenario.steps.length > 0 ? scenario.steps : await getScenarioSteps(db, scenario.id);
+    const firstStep = steps[0];
+    if (existing) {
+      if (!firstStep) {
+        return c.json({
+          success: true,
+          data: { id: existing.id, friendId: friend.id, scenarioId: scenario.id, currentStepOrder: existing.current_step_order, status: existing.status, startedAt: '', nextDeliveryAt: existing.next_delivery_at, updatedAt: '' },
+        });
+      }
+    }
+
+    const enrollment = existing
+      ? {
+          id: existing.id,
+          friend_id: friend.id,
+          scenario_id: scenario.id,
+          current_step_order: existing.current_step_order,
+          status: existing.status as DbFriendScenario['status'],
+          started_at: '',
+          next_delivery_at: existing.next_delivery_at,
+          updated_at: '',
+        }
+      : await enrollFriendInScenario(db, friend.id, scenario.id);
+
+    if (!firstStep) {
+      return c.json({ success: true, data: serializeFriendScenario(enrollment) }, 201);
+    }
+
+    await db
+      .prepare(`UPDATE friend_scenarios SET next_delivery_at = ?, updated_at = ? WHERE id = ?`)
+      .bind(SURVEY_SENTINEL, jstNow(), enrollment.id)
+      .run();
+
+    let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const scenarioLineAccountId = scenario.line_account_id;
+    const friendLineAccountId = (friend as typeof friend & { line_account_id?: string | null }).line_account_id ?? null;
+    const lineAccountId = scenarioLineAccountId ?? friendLineAccountId;
+    if (lineAccountId) {
+      const account = await getLineAccountById(db, lineAccountId);
+      if (account?.channel_access_token) {
+        accessToken = account.channel_access_token;
+      }
+    }
+
+    const lineClient = new LineClient(accessToken);
+    const expandedContent = expandVariables(
+      firstStep.message_content,
+      friend as { id: string; display_name: string | null; user_id: string | null; ref_code?: string | null },
+      c.env.WORKER_URL,
+    );
+    const message = buildMessage(firstStep.message_type, expandedContent);
+    await lineClient.pushMessage(friend.line_user_id, [message]);
+
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'push', ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        friend.id,
+        firstStep.message_type,
+        firstStep.message_content,
+        firstStep.id,
+        jstNow(),
+      )
+      .run();
+
+    await advanceFriendScenario(db, enrollment.id, firstStep.step_order, SURVEY_SENTINEL);
+
+    return c.json({
+      success: true,
+      data: { ...serializeFriendScenario(enrollment), currentStepOrder: firstStep.step_order, nextDeliveryAt: SURVEY_SENTINEL },
+    }, 201);
+  } catch (err) {
+    console.error('POST /api/scenarios/trigger error:', err);
+    return c.json({ success: false, error: err instanceof Error ? err.message : 'Internal server error' }, 500);
   }
 });
 

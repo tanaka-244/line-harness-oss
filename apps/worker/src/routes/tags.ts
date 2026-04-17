@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getTags, createTag, deleteTag } from '@line-crm/db';
+import { getTags, getTagsByAccount, createTag, deleteTag } from '@line-crm/db';
 import type { Tag as DbTag } from '@line-crm/db';
 import type { Env } from '../index.js';
 
@@ -14,10 +14,15 @@ function serializeTag(row: DbTag) {
   };
 }
 
-// GET /api/tags - list all tags
+// GET /api/tags - list tags (optionally scoped to an account)
+// ?lineAccountId=<id>  → only tags that have friends belonging to that account
+// (no param)           → all tags (used by friends management, automations, etc.)
 tags.get('/api/tags', async (c) => {
   try {
-    const items = await getTags(c.env.DB);
+    const lineAccountId = c.req.query('lineAccountId');
+    const items = lineAccountId
+      ? await getTagsByAccount(c.env.DB, lineAccountId)
+      : await getTags(c.env.DB);
     return c.json({ success: true, data: items.map(serializeTag) });
   } catch (err) {
     console.error('GET /api/tags error:', err);

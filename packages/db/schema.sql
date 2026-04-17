@@ -98,14 +98,16 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   title           TEXT NOT NULL,
   message_type    TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'flex')),
   message_content TEXT NOT NULL,
-  target_type     TEXT NOT NULL CHECK (target_type IN ('all', 'tag')) DEFAULT 'all',
+  target_type     TEXT NOT NULL CHECK (target_type IN ('all', 'tag', 'tag_exclude', 'no_tags')) DEFAULT 'all',
   target_tag_id   TEXT REFERENCES tags (id) ON DELETE SET NULL,
   status          TEXT NOT NULL CHECK (status IN ('draft', 'scheduled', 'sending', 'sent')) DEFAULT 'draft',
   scheduled_at    TEXT,
   sent_at         TEXT,
   total_count     INTEGER NOT NULL DEFAULT 0,
   success_count   INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  line_account_id TEXT,
+  alt_text        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_broadcasts_status ON broadcasts (status);
@@ -127,6 +129,24 @@ CREATE TABLE IF NOT EXISTS messages_log (
 
 CREATE INDEX IF NOT EXISTS idx_messages_log_friend_id ON messages_log (friend_id);
 CREATE INDEX IF NOT EXISTS idx_messages_log_created_at ON messages_log (created_at);
+
+-- ============================================================
+-- LINE Intake Sessions
+-- ============================================================
+CREATE TABLE IF NOT EXISTS intake_sessions (
+  id           TEXT PRIMARY KEY,
+  line_user_id TEXT NOT NULL,
+  session_type TEXT NOT NULL CHECK (session_type IN ('injury', 'chronic', 'beauty', 'beauty_medicell', 'revisit', 'consultation')),
+  current_step INTEGER NOT NULL DEFAULT 0,
+  answers      TEXT NOT NULL DEFAULT '{}',
+  status       TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'cancelled')) DEFAULT 'in_progress',
+  cancel_reason TEXT,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_intake_sessions_line_user_id ON intake_sessions (line_user_id);
+CREATE INDEX IF NOT EXISTS idx_intake_sessions_status ON intake_sessions (status);
 
 -- ============================================================
 -- Auto Replies

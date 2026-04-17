@@ -160,7 +160,7 @@ async function processAutomations(
       const actions = JSON.parse(automation.actions) as Array<{ type: string; params: Record<string, string> }>;
 
       // 条件チェック（簡易版: 条件が空なら常にマッチ）
-      if (!matchConditions(conditions, payload)) continue;
+      if (!(await matchConditions(db, conditions, payload))) continue;
 
       const results: Array<{ action: string; success: boolean; error?: string }> = [];
 
@@ -191,10 +191,11 @@ async function processAutomations(
 }
 
 /** 条件マッチング */
-function matchConditions(
+async function matchConditions(
+  db: D1Database,
   conditions: Record<string, unknown>,
   payload: EventPayload,
-): boolean {
+): Promise<boolean> {
   // 条件が空 → 常にマッチ
   if (Object.keys(conditions).length === 0) return true;
 
@@ -211,10 +212,44 @@ function matchConditions(
     if (payload.eventData.tagId !== conditions.tag_id) return false;
   }
 
-  // keyword チェック（message_received イベント用）
+  // keyword チェック（部分一致 — message_received イベント用）
   if (conditions.keyword !== undefined && payload.eventData) {
     const text = payload.eventData.text as string | undefined;
     if (!text || !text.includes(conditions.keyword as string)) return false;
+  }
+
+  // keyword_exact チェック（完全一致 — message_received イベント用）
+  // キーワードを含むメッセージではなく、送信テキストが完全に一致する場合のみ発火
+  if (conditions.keyword_exact !== undefined && payload.eventData) {
+    const text = payload.eventData.text as string | undefined;
+    if (!text || text !== conditions.keyword_exact) return false;
+  }
+
+  // in_scenario チェック — 指定シナリオにアクティブ登録中のユーザーのみ発火
+  // 値は scenarioId の文字列、または "*"（任意のアクティブシナリオ）
+  if (conditions.in_scenario !== undefined && payload.friendId) {
+    const scenarioId = conditions.in_scenario as string;
+    const row = scenarioId === '*'
+      ? await db.prepare(
+          `SELECT 1 FROM friend_scenarios WHERE friend_id = ? AND status = 'active' LIMIT 1`,
+        ).bind(payload.friendId).first()
+      : await db.prepare(
+          `SELECT 1 FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ? AND status = 'active' LIMIT 1`,
+        ).bind(payload.friendId, scenarioId).first();
+    if (!row) return false;
+  }
+
+  // not_in_scenario チェック — 指定シナリオに登録されていないユーザーのみ発火
+  if (conditions.not_in_scenario !== undefined && payload.friendId) {
+    const scenarioId = conditions.not_in_scenario as string;
+    const row = scenarioId === '*'
+      ? await db.prepare(
+          `SELECT 1 FROM friend_scenarios WHERE friend_id = ? AND status = 'active' LIMIT 1`,
+        ).bind(payload.friendId).first()
+      : await db.prepare(
+          `SELECT 1 FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ? AND status = 'active' LIMIT 1`,
+        ).bind(payload.friendId, scenarioId).first();
+    if (row) return false;
   }
 
   return true;
