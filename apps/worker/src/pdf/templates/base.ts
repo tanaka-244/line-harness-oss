@@ -1,4 +1,15 @@
-import { PDFDocument, PDFPage, PDFFont, PDFImage, rgb } from 'pdf-lib';
+import {
+  PDFDocument,
+  PDFPage,
+  PDFFont,
+  PDFImage,
+  rgb,
+  pushGraphicsState,
+  popGraphicsState,
+  rectangle,
+  clip,
+  endPath,
+} from 'pdf-lib';
 
 // A4サイズ (points)
 export const PAGE_W = 595.28;
@@ -443,5 +454,24 @@ export function drawBodyFigure(
   const figureH = pt(heightMm);
   const figureY = sectionStartY - figureH;
   const figureW = contentWidth * 0.5;
-  page.drawImage(figureImage, { x: figureX, y: figureY, width: figureW, height: figureH });
+
+  const imageWidth = figureImage.width;
+  const imageHeight = figureImage.height;
+  const scale = Math.max(figureW / imageWidth, figureH / imageHeight);
+  const renderW = imageWidth * scale;
+  const renderH = imageHeight * scale;
+
+  // 画像上部の余白を少しだけクリップして、縦方向のつぶれ感を減らす
+  const trimTopRatio = 0.06;
+  const renderX = figureX + (figureW - renderW) / 2;
+  const renderY = figureY + (figureH - renderH) / 2 - renderH * trimTopRatio;
+
+  page.pushOperators(
+    pushGraphicsState(),
+    rectangle(figureX, figureY, figureW, figureH),
+    clip(),
+    endPath(),
+  );
+  page.drawImage(figureImage, { x: renderX, y: renderY, width: renderW, height: renderH });
+  page.pushOperators(popGraphicsState());
 }
