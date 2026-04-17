@@ -15,6 +15,8 @@ export interface Broadcast {
   sent_at: string | null;
   total_count: number;
   success_count: number;
+  /** 配信後にアンケート同意QRを追加送信し受信者をシナリオへ自動エントリするフラグ */
+  survey_followup: number;
   created_at: string;
 }
 

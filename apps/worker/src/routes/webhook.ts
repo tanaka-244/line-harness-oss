@@ -523,6 +523,29 @@ async function handleSurveyResponse(
       .bind(crypto.randomUUID(), friend.id, type, content, ts)
       .run();
 
+  // ── ブロードキャスト起点の同意確認（step_order=0）──────────────
+  // ブロードキャストから「最後にひとつだけ…」を受け取り「もちろん！」を返答した場合
+  //   → Q1 を送信して step_order=2 へ進む
+  // 「また今度」
+  //   → お礼メッセージを送信してシナリオを完了
+  if (survey.current_step_order === 0) {
+    if (incomingText === 'もちろん！') {
+      const now = jstNow();
+      const q1Content = '{"text":"施術を受けて、症状はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良くなった👍","text":"とても良くなった👍"}},{"type":"action","action":{"type":"message","label":"少し良くなった","text":"少し良くなった"}},{"type":"action","action":{"type":"message","label":"変わらない","text":"変わらない"}},{"type":"action","action":{"type":"message","label":"悪くなった","text":"悪くなった"}}]}}';
+      await lineClient.replyMessage(replyToken, [buildMessage('text', q1Content)]);
+      await logOutgoing('text', q1Content, now);
+      await advanceFriendScenario(db, survey.id, 2, SURVEY_SENTINEL);
+    } else if (incomingText === 'また今度') {
+      const now = jstNow();
+      const thankText = 'ありがとうございます！またぜひご協力ください😊';
+      await lineClient.replyMessage(replyToken, [{ type: 'text', text: thankText } as Message]);
+      await logOutgoing('text', thankText, now);
+      await completeFriendScenario(db, survey.id);
+    }
+    // その他の入力はスルー（waiting 状態を継続）
+    return;
+  }
+
   // ── 同意確認（Step 1 送信済み）────────────────────────────────
   if (survey.current_step_order === 1) {
     if (incomingText === 'もちろん！') {
