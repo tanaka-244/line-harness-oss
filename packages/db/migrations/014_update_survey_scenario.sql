@@ -7,8 +7,7 @@
 UPDATE scenario_steps
 SET
   message_type    = 'text',
-  message_content = '{"text":"院の雰囲気やスタッフの対応はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良かった😊","text":"とても良かった😊"}},{"type":"action","action":{"type":"message","label":"良かった","text":"良かった"}},{"type":"action","action":{"type":"message","label":"普通","text":"普通"}},{"type":"action","action":{"type":"message","label":"改善してほしい","text":"改善してほしい"}}]}}',
-  updated_at      = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
+  message_content = '{"text":"院の雰囲気やスタッフの対応はいかがでしたか？","quickReply":{"items":[{"type":"action","action":{"type":"message","label":"とても良かった😊","text":"とても良かった😊"}},{"type":"action","action":{"type":"message","label":"良かった","text":"良かった"}},{"type":"action","action":{"type":"message","label":"普通","text":"普通"}},{"type":"action","action":{"type":"message","label":"改善してほしい","text":"改善してほしい"}}]}}'
 WHERE id = 'b0000000-0000-4000-8000-000000000003';
 
 -- Step 4: Q3（再来院意向）を追加
