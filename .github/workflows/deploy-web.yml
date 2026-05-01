@@ -36,4 +36,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/web/out --project-name=line-harness-web-2mb --commit-dirty=true
+          command: pages deploy apps/web/out --project-name=line-harness-web --commit-dirty=true
